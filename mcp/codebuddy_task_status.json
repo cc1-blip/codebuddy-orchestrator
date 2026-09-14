@@ -1,0 +1,17 @@
+{
+  "name": "codebuddy_task_status",
+  "description": "查询异步任务的最终执行成果或历史记录（仅在 waitCommand 完成后或排查时单次使用，【严禁】在任务运行中高频轮询）",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "description": "需要查询的任务 ID；缺省时返回当前所有活跃或最近完成的任务"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "可选，按工程根目录过滤任务"
+      }
+    }
+  }
+}

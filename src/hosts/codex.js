@@ -47,18 +47,26 @@ function applyCodexConfig(serverPath) {
   }
 
   let content = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
-  if (content.includes('[mcp_servers.codebuddy]')) {
-    return { status: 'already_configured', message: 'Codex config already contains codebuddy MCP server entry.' };
-  }
+  const normalizedPath = serverPath.replace(/\\/g, '/');
 
   // Create backup
   if (fs.existsSync(configPath)) {
     fs.writeFileSync(`${configPath}.bak-${Date.now()}`, content, 'utf8');
   }
 
+  if (content.includes('[mcp_servers.codebuddy]')) {
+    if (content.includes(`"${normalizedPath}"`)) {
+      return { status: 'already_configured', message: 'Codex 配置已正确包含当前 CodeBuddy MCP 服务路径。' };
+    }
+    const newSnippet = generateCodexTomlSnippet(serverPath).trim();
+    const updated = content.replace(/\[mcp_servers\.codebuddy\][\s\S]*?(?=\n\[|$)/, newSnippet + '\n\n');
+    fs.writeFileSync(configPath, updated, 'utf8');
+    return { status: 'updated', message: `Codex 已包含历史配置，已平滑自动更新路径至: ${serverPath}` };
+  }
+
   const snippet = generateCodexTomlSnippet(serverPath);
   fs.appendFileSync(configPath, snippet, 'utf8');
-  return { status: 'applied', message: `Successfully registered codebuddy MCP into ${configPath}` };
+  return { status: 'applied', message: `已成功将 CodeBuddy MCP 写入 Codex 配置文件: ${configPath}` };
 }
 
 module.exports = {

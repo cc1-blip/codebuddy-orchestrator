@@ -4,6 +4,7 @@ const path = require('node:path');
 const installer = require('../src/installer');
 const logger = require('../src/logger');
 const codexHost = require('../src/hosts/codex');
+const antigravityHost = require('../src/hosts/antigravity');
 const claudeHost = require('../src/hosts/claude');
 
 const args = process.argv.slice(2);
@@ -73,6 +74,8 @@ switch (command) {
       console.log('\n[Apply] 正在自动安全写入配置 (带 .bak 备份)...');
       const codexRes = codexHost.applyCodexConfig(serverPath);
       console.log(`- Codex: ${codexRes.message}`);
+      const antigravityRes = antigravityHost.applyAntigravityConfig(serverPath);
+      console.log(`- Antigravity: ${antigravityRes.message}`);
       const claudeRes = claudeHost.applyClaudeConfig(serverPath);
       console.log(`- Claude: ${claudeRes.message}`);
     } else {

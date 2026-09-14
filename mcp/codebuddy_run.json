@@ -1,0 +1,50 @@
+{
+  "name": "codebuddy_run",
+  "description": "通过 CodeBuddy 执行任务 (自动工程会话绑定 + 模型阶梯自愈 + 别名智能纠偏 + 突破300秒异步模式 + 并发防撞)",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "发送给模型的任务描述或 Prompt"
+      },
+      "model": {
+        "type": "string",
+        "description": "显式指定的模型 ID。支持别名自动纠偏 (如 \"4.1\" 或 \"deepseek4.1\" 自动映射至 \"deepseek-v4.1-flash\"；\"hy4\" 自动映射至 \"hy4-preview-f\"；若用户提到 4.1 严禁自行替换为 pro)。缺省时自动按当前项目的模型阶梯首选运行"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "执行工作区目录，默认为当前工程根目录"
+      },
+      "session_id": {
+        "type": "string",
+        "description": "指定会话 ID；缺省时自动使用当前工程专属的固定会话 ID"
+      },
+      "new_session": {
+        "type": "boolean",
+        "description": "是否为当前工程创建全新独立会话（重置历史上下文）"
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "description": "最大执行超时时间 (秒)，默认 600 秒 (10 分钟)"
+      },
+      "permission_mode": {
+        "type": "string",
+        "description": "权限模式，默认 bypassPermissions (自动放行代码修改与单测，避免挂起阻塞)",
+        "enum": [
+          "bypassPermissions",
+          "auto",
+          "acceptEdits",
+          "default"
+        ]
+      },
+      "async": {
+        "type": "boolean",
+        "description": "是否作为后台异步长任务执行。设为 true 时立即返回 taskId 与 waitCommand，彻底突破客户端超时限制；【严禁轮询】，请直接执行 waitCommand 挂起等待系统内核放行"
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  }
+}

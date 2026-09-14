@@ -1,0 +1,29 @@
+{
+  "name": "codebuddy_set_model_ladder",
+  "description": "为当前工程设定模型执行阶梯 (首选/次选/兜底)，配置一次自动持久化记忆",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cwd": {
+        "type": "string",
+        "description": "目标工程根目录，缺省为当前工程"
+      },
+      "preset": {
+        "type": "string",
+        "description": "预设套餐方案: A (深度攻坚型: DeepSeek-Pro -> 混元3.0 -> Flash), B (均衡主力型: 混元3.0 -> GLM-5.3 -> 3.0-X), C (极速响应型: DeepSeek-Flash -> GLM-Flash -> 混元3.0)",
+        "enum": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "ladder": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "自定义模型阶梯数组，按优先级顺序排列，如 [\"deepseek-v4.1-flash\", \"hy3\", \"glm-5.3\"]"
+      }
+    }
+  }
+}
