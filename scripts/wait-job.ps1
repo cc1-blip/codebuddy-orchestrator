@@ -9,10 +9,34 @@ param(
   [int]$TimeoutSeconds = 1200,
 
   [Parameter(Mandatory=$false)]
-  [string]$TasksFile = "C:\Users\cz\plugins\codebuddy-bridge\tasks.json"
+  [string]$TasksFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# Resolve TasksFile dynamically if not explicitly specified
+if ([string]::IsNullOrWhiteSpace($TasksFile)) {
+  if ($env:CODEBUDDY_TASKS_FILE -and (Test-Path -LiteralPath $env:CODEBUDDY_TASKS_FILE)) {
+    $TasksFile = $env:CODEBUDDY_TASKS_FILE
+  } else {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    $candidates = @(
+      (Join-Path $scriptDir "..\src\tasks.json"),
+      (Join-Path $HOME ".codebuddy-orchestrator\tasks.json"),
+      (Join-Path $HOME ".codebuddy-bridge\tasks.json"),
+      (Join-Path (Get-Location) "tasks.json")
+    )
+    foreach ($c in $candidates) {
+      if (Test-Path -LiteralPath $c) {
+        $TasksFile = (Resolve-Path -LiteralPath $c).Path
+        break
+      }
+    }
+    if ([string]::IsNullOrWhiteSpace($TasksFile)) {
+      $TasksFile = (Join-Path $scriptDir "..\src\tasks.json")
+    }
+  }
+}
 
 # 1. Enforce minimum timeout to prevent accidental disguised polling
 if ($TimeoutSeconds -lt 600) {

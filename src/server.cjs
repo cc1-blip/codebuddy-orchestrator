@@ -275,7 +275,7 @@ function releaseSessionLock(cwd, sessionId) {
 function getSessionUsageStats(targetCwd, sessionId, startTimestamp = 0) {
   try {
     const slug = path.resolve(targetCwd).replace(/[:\\/]+/g, '-').replace(/^[-]+/, '');
-    const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\cz';
+    const userHome = os.homedir();
     const jsonlPath = path.join(userHome, '.codebuddy', 'projects', slug, `${sessionId}.jsonl`);
     if (!fs.existsSync(jsonlPath)) return null;
 

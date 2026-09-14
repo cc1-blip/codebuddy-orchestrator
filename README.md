@@ -162,10 +162,11 @@ npx codebuddy-orchestrator status
 ## 🔌 宿主配置参考（按需粘贴）
 
 ### A. OpenAI Codex (`~/.codex/config.toml`)
+> 💡 **提示**：运行 `npx github:cc1-blip/codebuddy-orchestrator init` 会自动读取你本机的绝对路径并生成好配置，无需手改！
 ```toml
 [mcp_servers.codebuddy]
 command = "node"
-args = ["C:/Users/cz/plugins/codebuddy-orchestrator/src/server.cjs"]
+args = ["<你的绝对路径>/codebuddy-orchestrator/src/server.cjs"]
 enabled = true
 default_tools_approval_mode = "approve"
 startup_timeout_sec = 10
@@ -178,7 +179,7 @@ tool_timeout_sec = 1200
   "mcpServers": {
     "codebuddy": {
       "command": "node",
-      "args": ["C:/Users/cz/plugins/codebuddy-orchestrator/src/server.cjs"]
+      "args": ["<你的绝对路径>/codebuddy-orchestrator/src/server.cjs"]
     }
   }
 }

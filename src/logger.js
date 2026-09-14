@@ -6,9 +6,10 @@ function resolveLogFile() {
   const candidates = [
     process.env.CODEBUDDY_LOG_FILE,
     path.resolve(__dirname, 'bridge.log'),
-    'C:\\Users\\cz\\plugins\\codebuddy-bridge\\bridge.log',
+    path.resolve(__dirname, '..', 'src', 'bridge.log'),
     path.join(os.homedir(), '.codebuddy-orchestrator', 'bridge.log'),
     path.join(os.homedir(), '.codebuddy-bridge', 'bridge.log'),
+    path.join(os.homedir(), 'plugins', 'codebuddy-bridge', 'bridge.log'),
     path.join(process.cwd(), 'bridge.log'),
   ].filter(Boolean);
 
@@ -32,9 +33,10 @@ function resolveTasksFile() {
   const candidates = [
     process.env.CODEBUDDY_TASKS_FILE,
     path.resolve(__dirname, 'tasks.json'),
-    'C:\\Users\\cz\\plugins\\codebuddy-bridge\\tasks.json',
+    path.resolve(__dirname, '..', 'src', 'tasks.json'),
     path.join(os.homedir(), '.codebuddy-orchestrator', 'tasks.json'),
     path.join(os.homedir(), '.codebuddy-bridge', 'tasks.json'),
+    path.join(os.homedir(), 'plugins', 'codebuddy-bridge', 'tasks.json'),
     path.join(process.cwd(), 'tasks.json'),
   ].filter(Boolean);
 
