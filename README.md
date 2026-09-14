@@ -53,13 +53,18 @@ cd codebuddy-orchestrator && node bin/cli.js doctor
 
 ### 步骤 2：一键配置生成 / 自动写入 (Init)
 
-无需安装依赖，直接在终端执行：
-```bash
-# 查看配置代码预览 (Dry-Run 纯预览，不修改任何文件)
-npx github:cc1-blip/codebuddy-orchestrator init
+> 💡 **这是二选一的**：如果你想一步到位直接搞定，**直接执行选项 A 即可**！
 
-# 自动写入各宿主配置 (带自动时间戳 .bak 备份，绝不静默覆盖)
+#### 选项 A（最推荐 · 一步到位）：自动写入宿主配置
+自动检测并写入你电脑上的 Codex 或 Claude 配置（写入前强制自动生成带时间戳的 `.bak` 备份）：
+```bash
 npx github:cc1-blip/codebuddy-orchestrator init --apply
+```
+
+#### 选项 B（严谨预览 · 纯查看）：仅打印配置代码
+如果你想先肉眼看一眼配置长什么样、或者打算手工粘贴：
+```bash
+npx github:cc1-blip/codebuddy-orchestrator init
 ```
 
 ---
