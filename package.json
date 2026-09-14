@@ -1,0 +1,31 @@
+{
+  "name": "codebuddy-orchestrator",
+  "version": "1.0.0",
+  "description": "Enterprise-grade Dual-Agent orchestration bridge connecting OpenAI Codex, Google Antigravity, and Claude with Tencent CodeBuddy models using zero-polling OS kernel waits.",
+  "main": "src/server.cjs",
+  "bin": {
+    "codebuddy-orchestrator": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.cjs",
+    "doctor": "node bin/cli.js doctor",
+    "init": "node bin/cli.js init"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "codebuddy",
+    "deepseek",
+    "hunyuan",
+    "codex",
+    "antigravity",
+    "claude",
+    "orchestrator",
+    "dual-agent"
+  ],
+  "author": "Antigravity Pair Programming System",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
