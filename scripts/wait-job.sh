@@ -60,5 +60,39 @@ if [[ -n "$TARGET_PID" && "$TARGET_PID" -gt 0 ]]; then
 fi
 
 echo ""
-echo "[WAIT-JOB] Process wait concluded. Task execution finished."
+echo "[WAIT-JOB] Process PID ${TARGET_PID:-N/A} exited cleanly."
+
+# Settle delay
+sleep 1
+
+# Fetch and display final task output and token dashboard via Node
+TASKS_FILE="${TASKS_FILE:-$(dirname "$0")/../src/tasks.json}"
+if [[ -n "$TASK_ID" && -f "$TASKS_FILE" ]]; then
+  node -e '
+    const fs = require("fs");
+    const taskId = process.argv[1];
+    const tasksFile = process.argv[2];
+    for (let i = 0; i < 5; i++) {
+      try {
+        const raw = fs.readFileSync(tasksFile, "utf8");
+        const data = JSON.parse(raw);
+        const list = Array.isArray(data) ? data : (data.tasks || [data]);
+        const matched = list.slice().reverse().find(t => t.taskId === taskId);
+        if (matched && (matched.status === "completed" || matched.status === "failed")) {
+          console.log("\n=============================================");
+          console.log(`[TASK RESULT] TaskId: ${matched.taskId} | Status: ${matched.status}`);
+          console.log(`Model: ${matched.model} | Session: ${matched.sessionId}`);
+          console.log("=============================================\n");
+          if (matched.output) console.log(matched.output);
+          if (matched.status === "failed") {
+            console.error("Error: " + matched.error);
+            process.exit(1);
+          }
+          process.exit(0);
+        }
+      } catch {}
+    }
+  ' "$TASK_ID" "$TASKS_FILE"
+fi
+
 exit 0

@@ -132,6 +132,7 @@ function triggerLogin() {
 function runDoctor() {
   const env = checkEnvironment();
   const cli = resolveCodeBuddyInfo();
+  const auth = cli.installed ? checkAuthStatus() : { authed: false, reason: 'CLI not installed' };
   const serverPath = path.resolve(__dirname, 'server.cjs');
 
   const codex = codexHost.checkCodexConfig(serverPath);
@@ -143,13 +144,14 @@ function runDoctor() {
   console.log('===============================================================');
   console.log(`[运行环境] Node: ${env.nodeVersion} (${env.isNodeValid ? '✅ 符合要求' : '❌ 需 >= 18.0.0'}), 平台: ${env.platform}`);
   if (process.platform === 'win32') {
-    console.log(`[系统策略] PowerShell ExecutionPolicy: ${env.powershellPolicy} (已内置 -ExecutionPolicy Bypass 保护)`);
+    console.log(`[系统策略] PowerShell ExecutionPolicy: ${env.powershellPolicy} (脚本使用局部 -ExecutionPolicy Bypass 保护，不修改系统全局策略)`);
   }
 
   console.log('---------------------------------------------------------------');
   if (cli.installed) {
     console.log(`[CodeBuddy CLI] ✅ 已安装 (版本: ${cli.version})`);
     console.log(`                路径: ${cli.path}`);
+    console.log(`[账号登录状态]   ${auth.authed ? '✅ 已完成登录认证' : '⚪ 未检测到活跃登录 (可运行 login 命令扫码授权)'}`);
   } else {
     console.log(`[CodeBuddy CLI] ❌ 未检测到 CLI。请运行: npm install -g @tencent-ai/codebuddy-code`);
   }
@@ -161,7 +163,7 @@ function runDoctor() {
   console.log(`- Anthropic Claude:     ${claude.installed ? (claude.configured ? '✅ 已配置' : '⚪ 已安装但待配置') : '未检测到目录'}`);
 
   console.log('===============================================================');
-  return { env, cli, codex, antigravity, claude };
+  return { env, cli, auth, codex, antigravity, claude };
 }
 
 module.exports = {

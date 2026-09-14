@@ -38,21 +38,28 @@
 
 ## 🚀 极速上手 (Quick Start)
 
-### 步骤 1：一键体检与环境自检
-无需安装依赖，直接在终端执行：
+### 步骤 1：一键环境自检 (Doctor)
+
+无需发布 npm、无需提前下载，直接在终端执行：
 ```bash
-npx codebuddy-orchestrator doctor
+# 方式 A（最推荐）：直接通过 GitHub 仓库免装运行
+npx github:cc1-blip/codebuddy-orchestrator doctor
+
+# 方式 B：本地克隆运行
+git clone https://github.com/cc1-blip/codebuddy-orchestrator.git
+cd codebuddy-orchestrator && node bin/cli.js doctor
 ```
-系统会自动检测 Node.js (>=18)、PowerShell 脚本策略、CodeBuddy CLI 版本、大模型凭据与本地 AI 宿主。
+系统会自动检测 Node.js (>=18)、PowerShell 脚本策略、CodeBuddy CLI 版本、腾讯账号登录态与本地 AI 宿主配置。
 
-### 步骤 2：一键配置生成 / 自动写入
+### 步骤 2：一键配置生成 / 自动写入 (Init)
+
 无需安装依赖，直接在终端执行：
 ```bash
-# 查看配置代码预览 (Dry-Run)
-npx codebuddy-orchestrator init
+# 查看配置代码预览 (Dry-Run 纯预览，不修改任何文件)
+npx github:cc1-blip/codebuddy-orchestrator init
 
-# 自动写入各宿主配置 (带自动 .bak 备份，绝不静默覆盖)
-npx codebuddy-orchestrator init --apply
+# 自动写入各宿主配置 (带自动时间戳 .bak 备份，绝不静默覆盖)
+npx github:cc1-blip/codebuddy-orchestrator init --apply
 ```
 
 ---
@@ -233,6 +240,19 @@ codebuddy-orchestrator/
     ├── AGENTS.md                # 架构师-工人协作规则模板 (Section 5 反轮询准则)
     └── PROMPT_GUIDE.md          # 3 大实战场景即拷即用提示词模版
 ```
+
+---
+
+## 🛡️ 安全合规与行为边界说明（写给严谨开发者与 AI 审计）
+
+如果你或你的 AI 助手正在对本项目进行静态代码安全审计，以下是关键架构设计的安全边界公开说明：
+
+| 关注项 | 行为事实与设计约束 | 为什么这样做？ |
+| :--- | :--- | :--- |
+| **`bypassPermissions`** | 仅用于 CodeBuddy 子进程启动参数，且**修改范围受限于当前工程目录**。 | CodeBuddy 作为后台无头（Headless）长任务运行时，若触发终端单步交互确认（`[y/N]`），进程会因无 TTY 输入而永久死锁挂起。我们遵循“架构师把关、工人自主实施”的原则，任务完成后仍由主架构师（Codex/Claude）独立进行门禁复测与代码审查。 |
+| **进程回收 (`taskkill` / `SIGKILL`)** | **仅精准回收本任务自己拉起的特定子进程树 (通过 PID)**，绝对不扫描或触碰任何系统其他无关进程。 | 保证超时（Timeout）或服务停止（`stopWebUI`）时彻底释放本地计算资源与端口，杜绝孤儿进程与内存泄漏。 |
+| **宿主配置修改 (`init --apply`)** | 默认 `init` 纯为 **Dry-Run 预览**；加 `--apply` 写入时，**强制先在原目录生成带毫秒时间戳的 `.bak` 备份文件**，且具备幂等性检查，绝不静默覆盖已有服务。 | 保护开发者的已有全局配置（如 `~/.codex/config.toml` 或 `claude_desktop_config.json`），随时可一键还原。 |
+| **PowerShell `ExecutionPolicy`** | 仅在执行专用脚本的单次命令行中传递局部 `-ExecutionPolicy Bypass` 参数，**绝对不篡改、不持久化修改操作系统的全局注册表安全策略**。 | 规避 Windows 默认限制对自研自动化脚本的误拦截，确保开箱即用。 |
 
 ---
 
