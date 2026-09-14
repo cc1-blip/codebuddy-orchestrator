@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeBuddy 实时监考台</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* 极客终端滚动条 */
+    .terminal-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .terminal-scroll::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 4px;
+    }
+    .terminal-scroll::-webkit-scrollbar-thumb {
+      background: rgba(71, 85, 105, 0.8);
+      border-radius: 4px;
+    }
+    .terminal-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 116, 139, 1);
+    }
+    @keyframes pulse-fast {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.9); }
+    }
+    .live-pulse {
+      animation: pulse-fast 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-2 m-0 select-none font-sans">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl shadow-xl overflow-hidden flex flex-col" style="height: 430px; max-height: 430px;">
+    
+    <!-- 1. 顶部 Header 状态栏 -->
+    <div class="px-3.5 py-2.5 bg-slate-900/60 border-b border-[var(--border)] flex items-center justify-between gap-2 shrink-0">
+      <div class="flex items-center gap-2 min-w-0">
+        <!-- 动态状态指示灯 -->
+        <span class="relative flex h-2.5 w-2.5 shrink-0">
+          <span id="pingRing" class="live-pulse absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span id="pingDot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+        </span>
+        <span class="font-semibold text-xs tracking-tight text-slate-100 shrink-0">CodeBuddy 监考台</span>
+        
+        <!-- 生效模型徽标 -->
+        <span id="modelBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 truncate max-w-[140px]">
+          探测中...
+        </span>
+
+        <!-- 任务 ID 标签 -->
+        <span id="taskBadge" class="text-[10px] font-mono text-slate-400 hidden sm:inline truncate max-w-[100px]"></span>
+      </div>
+
+      <!-- 右侧：计时与状态 -->
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="text-[11px] font-mono text-slate-300 flex items-center gap-1 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
+          ⏱️ <span id="timerText">00:00</span>
+        </span>
+        <span id="statusTag" class="text-[11px] font-medium px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+          运行中
+        </span>
+      </div>
+    </div>
+
+    <!-- 2. 当前动作聚焦横幅 (Action Focus Banner) -->
+    <div class="px-3 py-1.5 bg-blue-950/40 border-b border-blue-900/30 flex items-center justify-between text-xs shrink-0">
+      <div class="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
+        <span class="text-blue-400 font-medium shrink-0">🎯 当前聚焦:</span>
+        <span id="currentActionText" class="text-blue-200 font-mono text-[11px] truncate">正在初始化会话环境与 CLI 调度...</span>
+      </div>
+      <div id="failoverBanner" class="hidden shrink-0 text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.5 rounded flex items-center gap-1 animate-pulse">
+        ⚡ 自动故障接力已激活
+      </div>
+    </div>
+
+    <!-- 2.1 宿主派发需求抽屉 (Host Prompt Drawer) -->
+    <div id="promptBox" class="hidden px-3 py-1 bg-slate-950/70 border-b border-slate-800/80 text-xs shrink-0 transition-all">
+      <div class="flex items-center justify-between cursor-pointer select-none py-0.5" id="btnTogglePrompt">
+        <div class="flex items-center gap-1.5 text-slate-300 font-medium overflow-hidden">
+          <span class="text-emerald-400 shrink-0">📥</span>
+          <span class="text-[11px] text-slate-200 shrink-0">派发指令:</span>
+          <span id="promptPreviewText" class="text-[11px] font-mono text-slate-400 truncate"></span>
+        </div>
+        <span id="promptArrow" class="text-slate-400 text-[10px] hover:text-slate-200 px-1 py-0.5 rounded bg-slate-800 border border-slate-700 shrink-0 ml-2">展开 ▼</span>
+      </div>
+      <div id="promptContent" class="hidden mt-1 p-2 bg-slate-900/90 rounded border border-slate-700/70 text-slate-200 font-mono text-[11px] max-h-24 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"></div>
+    </div>
+
+    <!-- 3. 极客暗黑终端代码流区域 (Terminal Body) -->
+    <div class="relative flex-1 min-h-0 bg-[#090d16] p-2.5 overflow-hidden flex flex-col">
+      <div id="terminalContainer" class="terminal-scroll flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed text-slate-300 select-text pr-1 space-y-0.5">
+        <div class="text-slate-500">[SYSTEM] 实时监考通道已挂载，正在与本地 Bridge 建立 EventSource 通信...</div>
+      </div>
+
+      <!-- 滚动到底部悬浮按钮 -->
+      <button id="btnScrollBottom" class="hidden absolute bottom-4 right-4 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-2.5 py-1 rounded-full shadow-lg border border-blue-400 flex items-center gap-1 transition">
+        ↓ 回到底部
+      </button>
+    </div>
+
+    <!-- 4. 底部交互与资源指标栏 (Footer Controls) -->
+    <div class="px-3 py-2 bg-slate-900/80 border-t border-[var(--border)] flex items-center justify-between gap-2 shrink-0 text-xs">
+      <!-- 左侧：指标或行数统计 -->
+      <div class="flex items-center gap-3 text-[11px] text-slate-400">
+        <span id="lineCount">共 0 行</span>
+        <span id="tokenStats" class="hidden sm:inline text-slate-500">• 0 tokens</span>
+      </div>
+
+      <!-- 右侧：交互按钮组 -->
+      <div class="flex items-center gap-1.5">
+        <!-- 复制日志 -->
+        <button id="btnCopy" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700 transition flex items-center gap-1">
+          📋 <span>复制日志</span>
+        </button>
+
+        <!-- 打开 WebUI -->
+        <button id="btnWebUI" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700 transition flex items-center gap-1">
+          🌐 <span>WebUI</span>
+        </button>
+
+        <!-- 🛑 紧急停止 -->
+        <button id="btnKill" class="px-2.5 py-1 text-[11px] bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded transition flex items-center gap-1 font-medium">
+          🛑 <span id="killText">中止任务</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    (function () {
+      // 1. 获取 URL 参数
+      const params = new URLSearchParams(window.location.search);
+      let taskId = params.get('taskId') || '';
+      const port = params.get('port') || '18991';
+      const baseUrl = `http://127.0.0.1:${port}`;
+
+      // DOM 元素引用
+      const terminal = document.getElementById('terminalContainer');
+      const pingRing = document.getElementById('pingRing');
+      const pingDot = document.getElementById('pingDot');
+      const modelBadge = document.getElementById('modelBadge');
+      const taskBadge = document.getElementById('taskBadge');
+      const timerText = document.getElementById('timerText');
+      const statusTag = document.getElementById('statusTag');
+      const currentActionText = document.getElementById('currentActionText');
+      const failoverBanner = document.getElementById('failoverBanner');
+      const btnScrollBottom = document.getElementById('btnScrollBottom');
+      const lineCount = document.getElementById('lineCount');
+      const tokenStats = document.getElementById('tokenStats');
+      const btnCopy = document.getElementById('btnCopy');
+      const btnWebUI = document.getElementById('btnWebUI');
+      const btnKill = document.getElementById('btnKill');
+      const killText = document.getElementById('killText');
+
+      let followTail = true;
+      let totalLines = 0;
+      let startTime = Date.now();
+      let timerInterval = null;
+      let eventSource = null;
+      let isTaskRunning = true;
+      let allLogsText = '';
+
+      // 格式化秒数
+      function formatTime(sec) {
+        const m = Math.floor(sec / 60).toString().padStart(2, '0');
+        const s = (sec % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+      }
+
+      function startTimer(baseStart) {
+        if (timerInterval) clearInterval(timerInterval);
+        startTime = baseStart || Date.now();
+        timerInterval = setInterval(() => {
+          if (!isTaskRunning) return;
+          const elapsed = Math.floor((Date.now() - startTime) / 1000);
+          timerText.textContent = formatTime(elapsed);
+        }, 1000);
+      }
+
+      // 处理滚动检测
+      terminal.addEventListener('scroll', () => {
+        const isAtBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight <= 30;
+        followTail = isAtBottom;
+        if (isAtBottom) {
+          btnScrollBottom.classList.add('hidden');
+        } else {
+          btnScrollBottom.classList.remove('hidden');
+        }
+      });
+
+      btnScrollBottom.addEventListener('click', () => {
+        followTail = true;
+        terminal.scrollTop = terminal.scrollHeight;
+        btnScrollBottom.classList.add('hidden');
+      });
+
+      // 追加日志行
+      function appendLog(lineText, type = 'stdout', action = null) {
+        totalLines++;
+        lineCount.textContent = `共 ${totalLines} 行`;
+        allLogsText += lineText + '\n';
+
+        const row = document.createElement('div');
+        row.className = 'flex items-start gap-1.5 hover:bg-slate-800/40 px-1 py-0.5 rounded transition';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'text-slate-600 select-none shrink-0';
+        const now = new Date();
+        timeSpan.textContent = now.toTimeString().split(' ')[0].slice(3);
+
+        const contentSpan = document.createElement('span');
+        contentSpan.className = 'break-all flex-1';
+
+        // 样式规则判定
+        if (lineText.startsWith('📥 [PROMPT]')) {
+          contentSpan.className += ' text-sky-300 bg-sky-950/60 p-2 rounded border border-sky-700/60 font-medium whitespace-pre-wrap leading-relaxed';
+        } else if (type === 'stderr' || /error|fatal|fail/i.test(lineText)) {
+          contentSpan.className += ' text-rose-400';
+        } else if (/\[diff\]|\+\+\+|---/i.test(lineText)) {
+          contentSpan.className += ' text-emerald-400';
+        } else if (/\[tool|calling tool|executing/i.test(lineText)) {
+          contentSpan.className += ' text-cyan-300 font-semibold';
+        } else if (/thinking|思考/i.test(lineText)) {
+          contentSpan.className += ' text-purple-300 italic';
+        } else if (type === 'info') {
+          contentSpan.className += ' text-amber-300 font-medium';
+        } else {
+          contentSpan.className += ' text-slate-300';
+        }
+
+        contentSpan.textContent = lineText;
+        row.appendChild(timeSpan);
+        row.appendChild(contentSpan);
+        terminal.appendChild(row);
+
+        if (action) {
+          currentActionText.textContent = action;
+        }
+
+        if (followTail) {
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+      }
+
+      // 绑定宿主指令折叠交互
+      const btnTogglePrompt = document.getElementById('btnTogglePrompt');
+      const promptContent = document.getElementById('promptContent');
+      const promptArrow = document.getElementById('promptArrow');
+      if (btnTogglePrompt && promptContent && promptArrow) {
+        btnTogglePrompt.addEventListener('click', () => {
+          const isHidden = promptContent.classList.contains('hidden');
+          if (isHidden) {
+            promptContent.classList.remove('hidden');
+            promptArrow.textContent = '收起 ▲';
+          } else {
+            promptContent.classList.add('hidden');
+            promptArrow.textContent = '展开 ▼';
+          }
+        });
+      }
+
+      // 更新状态指示
+      function updateStatus(status, errorMsg) {
+        if (status === 'completed') {
+          isTaskRunning = false;
+          pingRing.className = 'hidden';
+          pingDot.className = 'relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500';
+          statusTag.className = 'text-[11px] font-medium px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30';
+          statusTag.textContent = '已完成';
+          currentActionText.textContent = '✅ 任务已圆满完成！';
+          btnKill.classList.add('opacity-50', 'pointer-events-none');
+        } else if (status === 'aborted') {
+          isTaskRunning = false;
+          pingRing.className = 'hidden';
+          pingDot.className = 'relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500';
+          statusTag.className = 'text-[11px] font-medium px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
+          statusTag.textContent = '已中止';
+          currentActionText.textContent = '🛑 任务已由人工手动终止';
+          btnKill.classList.add('opacity-50', 'pointer-events-none');
+        } else if (status === 'failed') {
+          isTaskRunning = false;
+          pingRing.className = 'hidden';
+          pingDot.className = 'relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500';
+          statusTag.className = 'text-[11px] font-medium px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30';
+          statusTag.textContent = '失败';
+          currentActionText.textContent = `❌ 执行失败: ${errorMsg || '异常退出'}`;
+          btnKill.classList.add('opacity-50', 'pointer-events-none');
+        }
+      }
+
+      // 连接 SSE 实时通道
+      function connectSSE(tid) {
+        if (eventSource) eventSource.close();
+        const streamUrl = `${baseUrl}/api/tasks/${encodeURIComponent(tid)}/stream`;
+        eventSource = new EventSource(streamUrl);
+
+        eventSource.onopen = () => {
+          appendLog(`[SYSTEM] 成功接入任务通道 [${tid}]`, 'info', '⚡ 实时数据流已连通');
+        };
+
+        eventSource.addEventListener('init', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.model) {
+              modelBadge.textContent = data.model;
+              if (data.model.includes('pro')) {
+                modelBadge.className = 'text-[11px] font-mono px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30';
+              } else if (data.model.includes('flash') || data.model.includes('4.1')) {
+                modelBadge.className = 'text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+              } else {
+                modelBadge.className = 'text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30';
+              }
+            }
+            if (data.prompt) {
+              const pBox = document.getElementById('promptBox');
+              const pPreview = document.getElementById('promptPreviewText');
+              const pContent = document.getElementById('promptContent');
+              if (pBox && pPreview && pContent) {
+                pPreview.textContent = data.prompt.replace(/\s+/g, ' ');
+                pContent.textContent = data.prompt;
+                pBox.classList.remove('hidden');
+              }
+            }
+            if (data.startedAt) startTimer(data.startedAt);
+            if (data.status && data.status !== 'running') {
+              updateStatus(data.status, data.error);
+            }
+          } catch {}
+        });
+
+        eventSource.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            appendLog(data.line, data.type, data.action);
+          } catch {}
+        };
+
+        eventSource.addEventListener('status', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            updateStatus(data.status, data.error);
+          } catch {}
+        });
+
+        eventSource.onerror = () => {
+          // SSE 断开时尝试 fallback 轮询 logs
+          fallbackPoll(tid);
+        };
+      }
+
+      // Fallback 轮询保障机制
+      let pollCount = 0;
+      async function fallbackPoll(tid) {
+        if (!isTaskRunning || pollCount > 60) return;
+        pollCount++;
+        try {
+          const res = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(tid)}/logs`);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.task) {
+              if (json.task.model) modelBadge.textContent = json.task.model;
+              if (json.task.status && json.task.status !== 'running') {
+                updateStatus(json.task.status, json.task.error);
+              }
+            }
+          }
+        } catch {}
+        if (isTaskRunning) {
+          setTimeout(() => fallbackPoll(tid), 2500);
+        }
+      }
+
+      // 复制全部日志
+      btnCopy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(allLogsText);
+          const oldText = btnCopy.innerHTML;
+          btnCopy.innerHTML = '✅ <span>已复制!</span>';
+          setTimeout(() => { btnCopy.innerHTML = oldText; }, 1500);
+        } catch (e) {
+          alert('复制失败，请直接在终端框选按 Ctrl+C');
+        }
+      });
+
+      // 打开 WebUI
+      btnWebUI.addEventListener('click', () => {
+        window.open('http://127.0.0.1:18990', '_blank');
+      });
+
+      // 🛑 紧急停止交互（带二次确认）
+      let killConfirmTimeout = null;
+      btnKill.addEventListener('click', async () => {
+        if (!isTaskRunning) return;
+
+        if (killText.textContent === '中止任务') {
+          killText.textContent = '点此确认停止!';
+          btnKill.className = 'px-2.5 py-1 text-[11px] bg-rose-600 text-white border border-rose-500 rounded transition font-bold animate-pulse';
+          killConfirmTimeout = setTimeout(() => {
+            killText.textContent = '中止任务';
+            btnKill.className = 'px-2.5 py-1 text-[11px] bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded transition flex items-center gap-1 font-medium';
+          }, 3000);
+          return;
+        }
+
+        clearTimeout(killConfirmTimeout);
+        killText.textContent = '正在中止...';
+        btnKill.classList.add('opacity-70', 'pointer-events-none');
+
+        try {
+          const res = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(taskId)}/abort`, {
+            method: 'POST'
+          });
+          const result = await res.json();
+          appendLog(`[SYSTEM] 🛑 已向系统发送中止信号: ${result.message || '操作完成'}`, 'info', '🛑 任务已中止');
+          updateStatus('aborted');
+        } catch (err) {
+          appendLog(`[SYSTEM] 中止请求出错: ${err.message}`, 'stderr');
+        }
+      });
+
+      // 初始化启动逻辑
+      async function init() {
+        startTimer(Date.now());
+        if (!taskId) {
+          // 若无 taskId 参数，向 Bridge 请求最新任务
+          try {
+            const res = await fetch(`${baseUrl}/api/tasks/latest`);
+            if (res.ok) {
+              const latest = await res.json();
+              if (latest && latest.taskId) {
+                taskId = latest.taskId;
+              }
+            }
+          } catch {}
+        }
+
+        if (taskId) {
+          taskBadge.textContent = `#${taskId.slice(-8)}`;
+          connectSSE(taskId);
+        } else {
+          appendLog('[SYSTEM] 未检测到活跃的 Task ID。请从 codebuddy_run 派发后自动呼出本监考台。', 'info');
+        }
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>

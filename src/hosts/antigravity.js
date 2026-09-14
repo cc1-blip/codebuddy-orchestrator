@@ -10,6 +10,10 @@ function getAntigravitySkillDir() {
   return path.join(os.homedir(), '.gemini', 'config', 'plugins', 'codebuddy-orchestrator', 'skills', 'codebuddy-orchestrator');
 }
 
+function getAntigravityAssetDir() {
+  return path.join(os.homedir(), '.gemini', 'config', 'plugins', 'codebuddy-orchestrator', 'assets');
+}
+
 function checkAntigravityConfig() {
   const mcpDir = getAntigravityMcpDir();
   const installed = fs.existsSync(path.join(os.homedir(), '.gemini', 'antigravity'));
@@ -19,11 +23,14 @@ function checkAntigravityConfig() {
     mcpConfigured,
     mcpDir,
     skillDir: getAntigravitySkillDir(),
+    assetDir: getAntigravityAssetDir(),
   };
 }
 
 module.exports = {
   getAntigravityMcpDir,
   getAntigravitySkillDir,
+  getAntigravityAssetDir,
   checkAntigravityConfig,
 };
+

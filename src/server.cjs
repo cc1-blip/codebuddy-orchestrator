@@ -1,10 +1,12 @@
 const { spawn, execFile, execSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
+const url = require('node:url');
 
 function resolveBinary(name, candidates = []) {
   for (const c of candidates) {
@@ -41,6 +43,19 @@ const PID_FILE = path.join(__dirname, 'daemon.pid');
 const SESSIONS_CONFIG_FILE = path.join(__dirname, 'sessions.json');
 const TASKS_FILE = path.join(__dirname, 'tasks.json');
 const LOCKS_DIR = path.join(__dirname, '.locks');
+const TASK_LOGS_DIR = path.resolve(__dirname, '..', 'task-logs');
+const ASSETS_DIR = path.resolve(__dirname, '..', 'assets');
+const MONITOR_HTML_PATH = path.join(ASSETS_DIR, 'codebuddy_monitor.html');
+const MONITOR_PORT_FILE = path.join(__dirname, 'monitor.json');
+
+function ensureDirs() {
+  try {
+    if (!fs.existsSync(TASK_LOGS_DIR)) fs.mkdirSync(TASK_LOGS_DIR, { recursive: true });
+    if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
+    if (!fs.existsSync(LOCKS_DIR)) fs.mkdirSync(LOCKS_DIR, { recursive: true });
+  } catch (e) {}
+}
+ensureDirs();
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -438,6 +453,344 @@ function cleanupOldTasks() {
   saveTasks();
 }
 
+// --- 实时日志流与 SSE 广播管理器 ---
+const taskLogBuffers = new Map(); // taskId -> Array<{ time: number, line: string, type: string, action: string|null }>
+const taskSubscribers = new Map(); // taskId -> Set<http.ServerResponse>
+const MAX_BUFFERED_LINES = 1000;
+
+function appendTaskLog(taskId, line, type = 'stdout', action = null) {
+  if (!taskId) return;
+  const entry = {
+    time: Date.now(),
+    line,
+    type,
+    action,
+  };
+
+  // 1. 内存环形缓冲
+  let buf = taskLogBuffers.get(taskId);
+  if (!buf) {
+    buf = [];
+    taskLogBuffers.set(taskId, buf);
+  }
+  buf.push(entry);
+  if (buf.length > MAX_BUFFERED_LINES) {
+    buf.shift();
+  }
+
+  // 2. 磁盘追加写
+  try {
+    const logFile = path.join(TASK_LOGS_DIR, `${taskId}.log`);
+    const dateStr = new Date(entry.time).toTimeString().split(' ')[0];
+    fs.appendFileSync(logFile, `[${dateStr}] [${type.toUpperCase()}] ${line}\n`, 'utf8');
+  } catch {}
+
+  // 3. 广播给 SSE 订阅者
+  const subs = taskSubscribers.get(taskId);
+  if (subs && subs.size > 0) {
+    const payload = `data: ${JSON.stringify(entry)}\n\n`;
+    for (const res of Array.from(subs)) {
+      try {
+        res.write(payload);
+      } catch (e) {
+        subs.delete(res);
+      }
+    }
+  }
+}
+
+function broadcastTaskEvent(taskId, eventType, data) {
+  const subs = taskSubscribers.get(taskId);
+  if (subs && subs.size > 0) {
+    const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of Array.from(subs)) {
+      try {
+        res.write(payload);
+      } catch (e) {
+        subs.delete(res);
+      }
+    }
+  }
+}
+
+function extractActionFromLine(line) {
+  if (!line || typeof line !== 'string') return null;
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  if (/(?:searching|find|grep|glob|ripgrep|查找|搜索|检索)/i.test(trimmed)) {
+    return `🔍 ${trimmed.slice(0, 80)}`;
+  }
+  if (/(?:reading|inspecting|cat|view|read_file|正在读取|查看文件)/i.test(trimmed)) {
+    return `📖 ${trimmed.slice(0, 80)}`;
+  }
+  if (/(?:writing|patching|replace|edit|write_to_file|modify|正在修改|写入文件)/i.test(trimmed)) {
+    return `✏️ ${trimmed.slice(0, 80)}`;
+  }
+  if (/(?:executing|running|bash|cmd|powershell|npm|pnpm|yarn|pytest|test|执行命令|运行单测)/i.test(trimmed)) {
+    return `🧪 ${trimmed.slice(0, 80)}`;
+  }
+  if (/(?:thinking|reasoning|plan|analyzing|思考|分析|规划)/i.test(trimmed)) {
+    return `🤔 ${trimmed.slice(0, 80)}`;
+  }
+  if (/(?:diff --git|\+\+\+|\-\-\-|@@)/.test(trimmed)) {
+    return `📝 正在生成代码差异 (Diff)...`;
+  }
+  return null;
+}
+
+function abortTask(taskId) {
+  touchActivity();
+  loadTasks();
+  const t = runningTasks.get(taskId);
+  if (!t) {
+    return { success: false, message: `未找到任务 ${taskId}` };
+  }
+  if (t.status !== 'running') {
+    return { success: true, message: `任务已处于 ${t.status} 状态，无需终止`, status: t.status };
+  }
+
+  log(`[任务终止] 收到用户手动终止请求: ${taskId} (pid=${t.pid})`);
+
+  if (t.pid) {
+    cleanupProcess(t.pid);
+  }
+
+  t.status = 'aborted';
+  t.endedAt = Date.now();
+  t.error = '用户已通过实时监控控制台手动紧急中止';
+  t.progress = '任务已被用户手动终止';
+  saveTasks();
+
+  appendTaskLog(taskId, '⚠️ 任务已被用户通过监控卡片手动紧急中止！', 'info', '🛑 任务已中止');
+  broadcastTaskEvent(taskId, 'status', {
+    status: 'aborted',
+    message: '任务已被用户手动终止',
+    endedAt: t.endedAt,
+  });
+
+  releaseSessionLock(t.cwd, t.sessionId);
+
+  return { success: true, message: '任务已成功中止', taskId };
+}
+
+let monitorServer = null;
+let activeMonitorPort = 18991;
+
+function saveMonitorPort(port) {
+  try {
+    fs.writeFileSync(MONITOR_PORT_FILE, JSON.stringify({ port, pid: process.pid, updatedAt: Date.now() }, null, 2), 'utf8');
+  } catch {}
+}
+
+function getActiveMonitorPort() {
+  try {
+    if (fs.existsSync(MONITOR_PORT_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MONITOR_PORT_FILE, 'utf8'));
+      if (data && data.port) return data.port;
+    }
+  } catch {}
+  return activeMonitorPort || 18991;
+}
+
+function handleMonitorHttpRequest(req, res) {
+  const parsedUrl = url.parse(req.url, true);
+  const pathname = parsedUrl.pathname;
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // 1. 健康探测
+  if (pathname === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'codebuddy-monitor-bridge',
+      version: '4.2',
+      port: activeMonitorPort,
+      pid: process.pid,
+      uptime: process.uptime(),
+    }));
+    return;
+  }
+
+  // 2. 静态页面 /monitor
+  if (pathname === '/monitor' || pathname === '/') {
+    const htmlFile = fs.existsSync(MONITOR_HTML_PATH)
+      ? MONITOR_HTML_PATH
+      : path.join(__dirname, 'codebuddy_monitor.html');
+    if (fs.existsSync(htmlFile)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      fs.createReadStream(htmlFile).pipe(res);
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Monitor HTML template not found');
+    }
+    return;
+  }
+
+  // 3. 最新任务查询: GET /api/tasks/latest
+  if (pathname === '/api/tasks/latest' && req.method === 'GET') {
+    loadTasks();
+    const tasksArr = Array.from(runningTasks.values());
+    const running = tasksArr.filter(t => t.status === 'running');
+    const latest = running.length > 0 ? running[running.length - 1] : (tasksArr[tasksArr.length - 1] || null);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(latest || {}));
+    return;
+  }
+
+  // 4. SSE 流式日志: GET /api/tasks/:id/stream
+  const streamMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/stream$/);
+  if (streamMatch && req.method === 'GET') {
+    const taskId = decodeURIComponent(streamMatch[1]);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`: ping\n\n`);
+
+    let subs = taskSubscribers.get(taskId);
+    if (!subs) {
+      subs = new Set();
+      taskSubscribers.set(taskId, subs);
+    }
+    subs.add(res);
+
+    // 回放历史缓冲
+    const buf = taskLogBuffers.get(taskId) || [];
+    for (const item of buf) {
+      res.write(`data: ${JSON.stringify(item)}\n\n`);
+    }
+
+    // 回显初始状态
+    loadTasks();
+    const task = runningTasks.get(taskId);
+    if (task) {
+      res.write(`event: init\ndata: ${JSON.stringify({
+        taskId: task.taskId,
+        status: task.status,
+        model: task.model,
+        prompt: task.prompt || '',
+        sessionId: task.sessionId,
+        startedAt: task.startedAt,
+        endedAt: task.endedAt,
+        progress: task.progress,
+        error: task.error,
+      })}\n\n`);
+      if (task.status !== 'running') {
+        res.write(`event: status\ndata: ${JSON.stringify({ status: task.status })}\n\n`);
+      }
+    }
+
+    const heartbeatTimer = setInterval(() => {
+      try {
+        res.write(`: ping\n\n`);
+      } catch {
+        clearInterval(heartbeatTimer);
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(heartbeatTimer);
+      if (subs) subs.delete(res);
+    });
+    return;
+  }
+
+  // 5. JSON 日志查询: GET /api/tasks/:id/logs
+  const logsMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/logs$/);
+  if (logsMatch && req.method === 'GET') {
+    const taskId = decodeURIComponent(logsMatch[1]);
+    loadTasks();
+    const task = runningTasks.get(taskId) || null;
+    const buf = taskLogBuffers.get(taskId) || [];
+    let diskLogs = null;
+    try {
+      const diskPath = path.join(TASK_LOGS_DIR, `${taskId}.log`);
+      if (fs.existsSync(diskPath)) {
+        diskLogs = fs.readFileSync(diskPath, 'utf8');
+      }
+    } catch {}
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      taskId,
+      task,
+      bufferedCount: buf.length,
+      logs: buf,
+      rawLogLength: diskLogs ? diskLogs.length : 0,
+    }));
+    return;
+  }
+
+  // 6. 中止任务: POST /api/tasks/:id/abort
+  const abortMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/abort$/);
+  if (abortMatch && req.method === 'POST') {
+    const taskId = decodeURIComponent(abortMatch[1]);
+    const result = abortTask(taskId);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(result));
+    return;
+  }
+
+  // 404
+  res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
+}
+
+function startMonitorServer(startPort = 18991) {
+  if (monitorServer) return;
+  let curPort = startPort;
+  const maxPort = startPort + 10;
+
+  function tryListen(port) {
+    const srv = http.createServer(handleMonitorHttpRequest);
+
+    srv.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        log(`[MonitorServer] 端口 ${port} 被占用，尝试探测其健康状态...`);
+        fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1000) })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data && data.service === 'codebuddy-monitor-bridge') {
+              log(`[MonitorServer] 发现已有健康运行的 MonitorServer (Port=${port})，本进程复用该通道`);
+              activeMonitorPort = port;
+              saveMonitorPort(port);
+            } else if (port < maxPort) {
+              tryListen(port + 1);
+            }
+          })
+          .catch(() => {
+            if (port < maxPort) {
+              tryListen(port + 1);
+            }
+          });
+      } else {
+        log(`[MonitorServer] 启动失败: ${err.message}`);
+      }
+    });
+
+    srv.listen(port, '127.0.0.1', () => {
+      activeMonitorPort = port;
+      monitorServer = srv;
+      saveMonitorPort(port);
+      log(`[MonitorServer] CodeBuddy 实时流式监控服务就绪: http://127.0.0.1:${port}`);
+    });
+  }
+
+  tryListen(curPort);
+}
+
 function loadSessionsConfig() {
   try {
     if (fs.existsSync(SESSIONS_CONFIG_FILE)) {
@@ -806,7 +1159,7 @@ function isNetworkError(errText) {
 }
 
 // --- 单次执行底层调用（含实时流式心跳） ---
-function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permissionMode, onProgress = null, onSpawn = null) {
+function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permissionMode, onProgress = null, onSpawn = null, onLogLine = null) {
   return new Promise((resolve) => {
     log(`[CLI 执行单次] prompt length=${prompt.length}, model=${model}, cwd=${cwd}, sessionId=${sessionId}, timeoutMs=${timeoutMs}, permissionMode=${permissionMode}`);
 
@@ -853,6 +1206,9 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
         if (typeof onProgress === 'function') {
           try { onProgress(trimmed); } catch {}
         }
+        if (typeof onLogLine === 'function') {
+          try { onLogLine(trimmed, 'stdout'); } catch {}
+        }
       }
     });
 
@@ -862,6 +1218,9 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
       const trimmed = line.trim();
       if (trimmed) {
         log(`[CLI stderr:${model}] ${trimmed.slice(0, 160)}`);
+        if (typeof onLogLine === 'function') {
+          try { onLogLine(trimmed, 'stderr'); } catch {}
+        }
       }
     });
 
@@ -939,7 +1298,8 @@ async function runPrompt(
   permissionMode = 'bypassPermissions',
   onProgress = null,
   isAlreadyLocked = false,
-  onSpawn = null
+  onSpawn = null,
+  onLogLine = null
 ) {
   touchActivity();
   const startTime = Date.now();
@@ -999,7 +1359,8 @@ async function runPrompt(
         timeoutMs,
         permissionMode,
         onProgress,
-        onSpawn
+        onSpawn,
+        onLogLine
       );
 
       if (res.success) {
@@ -1034,6 +1395,9 @@ async function runPrompt(
         const notice = `模型 \`${curModel}\` ${reasons.join(' / ')}，已自动无缝切换至 \`${nextModel}\` 继续执行当前会话。`;
         log(`[Failover] ${notice}`);
         failoverNotices.push(notice);
+        if (typeof onLogLine === 'function') {
+          try { onLogLine(`⚡ [FAILOVER] ${notice}`, 'info'); } catch {}
+        }
         continue;
       }
 
@@ -1079,6 +1443,7 @@ async function startAsyncTask(args, timeoutMs) {
     cwd: resolvedCwd,
     model: targetModel,
     sessionId: targetSessionId,
+    prompt: args.prompt || '',
     status: 'running',
     startedAt: Date.now(),
     endedAt: null,
@@ -1090,6 +1455,12 @@ async function startAsyncTask(args, timeoutMs) {
   runningTasks.set(taskId, taskRecord);
   saveTasks();
   cleanupOldTasks();
+  startMonitorServer();
+
+  appendTaskLog(taskId, `[INIT] 任务已创建: model=${targetModel}, session=${targetSessionId}`, 'info', '🚀 任务初始化');
+  if (args.prompt) {
+    appendTaskLog(taskId, `📥 [PROMPT] 宿主派发指令:\n${args.prompt}`, 'info', '📥 收到派发指令');
+  }
 
   let spawnResolver;
   const spawnPromise = new Promise((resolve) => { spawnResolver = resolve; });
@@ -1116,6 +1487,14 @@ async function startAsyncTask(args, timeoutMs) {
           saveTasks();
           clearTimeout(spawnTimeout);
           spawnResolver(pid);
+          appendTaskLog(taskId, `[PROCESS] CLI 进程已就绪 (PID: ${pid})`, 'info', '🚀 进程已拉起');
+        },
+        (line, type) => {
+          const action = extractActionFromLine(line);
+          if (action) {
+            taskRecord.currentAction = action;
+          }
+          appendTaskLog(taskId, line, type, action);
         }
       );
       taskRecord.status = 'completed';
@@ -1123,12 +1502,16 @@ async function startAsyncTask(args, timeoutMs) {
       taskRecord.endedAt = Date.now();
       taskRecord.progress = '执行成功完成';
       saveTasks();
+      appendTaskLog(taskId, '🎉 任务执行完毕，结果已就绪！', 'info', '✅ 执行完成');
+      broadcastTaskEvent(taskId, 'status', { status: 'completed', endedAt: taskRecord.endedAt });
     } catch (err) {
       taskRecord.status = 'failed';
       taskRecord.error = err.message;
       taskRecord.endedAt = Date.now();
       taskRecord.progress = `执行失败: ${err.message}`;
       saveTasks();
+      appendTaskLog(taskId, `❌ 任务执行异常: ${err.message}`, 'stderr', '❌ 执行失败');
+      broadcastTaskEvent(taskId, 'status', { status: 'failed', error: err.message, endedAt: taskRecord.endedAt });
     } finally {
       releaseSessionLock(resolvedCwd, targetSessionId);
     }
@@ -1152,6 +1535,10 @@ async function startAsyncTask(args, timeoutMs) {
       : `bash "${localSh}" --task-id "${taskId}"`;
   }
 
+  const monitorPort = getActiveMonitorPort();
+  const monitorHttpUrl = `http://127.0.0.1:${monitorPort}/monitor?taskId=${taskId}&port=${monitorPort}`;
+  const monitorEmbedTag = `<agent-embed src="file:///${MONITOR_HTML_PATH.replace(/\\/g, '/')}?taskId=${taskId}&port=${monitorPort}"></agent-embed>`;
+
   return JSON.stringify({
     status: 'started',
     taskId,
@@ -1159,6 +1546,8 @@ async function startAsyncTask(args, timeoutMs) {
     sessionId: targetSessionId,
     model: targetModel,
     cwd: resolvedCwd,
+    monitorUrl: monitorHttpUrl,
+    embedTag: monitorEmbedTag,
     waitCommand: waitCmd,
     policy: [
       '【严禁轮询】严禁使用 Start-Sleep 或任何短 timeout 的循环（如 -Timeout 55）；',
@@ -1580,4 +1969,6 @@ rl.on('line', async (line) => {
   }
 });
 
-log('CodeBuddy Bridge 4.1 (跨进程文件锁互斥 + 模型阶梯全类故障自愈 + 精确CORS + 长任务空闲保护 + 端口来源统一 + 跨平台进程树清理) 已就绪');
+startMonitorServer();
+log('CodeBuddy Orchestrator 1.1 (Dual-Agent Bridge + SSE Stream Monitor + Generative UI) ready');
+

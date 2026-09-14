@@ -41,3 +41,9 @@ When launching an asynchronous task (`async: true`):
 ### 3. Model Ladder Failover & Alias Normalization
 - If the user explicitly mentions a model (e.g. "4.1" or "deepseek4.1"), it maps to `deepseek-v4.1-flash`.
 - If a model encounters a 429 quota limit or network timeout, the bridge automatically failovers to the next model in the ladder within the same session.
+
+### 4. Real-time Live Streaming Monitor (Generative UI & Zero-Token Observability)
+- When launching an asynchronous task (`async: true`), the response includes `monitorUrl` and `embedTag`.
+- **In Google Antigravity**: Immediately render `embedTag` (`<agent-embed src="..."></agent-embed>`) in the chat bubble. It renders an interactive dark terminal card directly in DOM via local SSE (`127.0.0.1:18991`), providing millisecond-level code flow, incoming prompt review, action focus, and an abort kill-switch with **0 LLM token consumption**.
+- **In OpenAI Codex**: Present `monitorUrl` (`http://127.0.0.1:18991/monitor?taskId=...`) for one-click browser viewing while running `waitCommand` in the terminal.
+
