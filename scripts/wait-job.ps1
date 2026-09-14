@@ -51,7 +51,36 @@ if ($targetPid -gt 0) {
     Write-Output "=================================================="
 
     try {
-      Wait-Process -Id $targetPid -Timeout $TimeoutSeconds -ErrorAction Stop
+      $startTime = Get-Date
+      $lastLine = ""
+      while ($proc -and -not $proc.HasExited) {
+        $hasExited = $proc.WaitForExit(3000)
+        if ($hasExited) { break }
+
+        $elapsed = [math]::Round(((Get-Date) - $startTime).TotalSeconds)
+        if ($elapsed -ge $TimeoutSeconds) {
+          throw "Wait timed out after ${TimeoutSeconds}s"
+        }
+
+        # Check latest progress from tasks.json to provide live transparent heartbeat
+        if ($TaskId -ne "" -and (Test-Path -LiteralPath $TasksFile)) {
+          try {
+            $tContent = [System.IO.File]::ReadAllText($TasksFile)
+            $tData = $tContent | ConvertFrom-Json
+            $cur = $null
+            if ($tData -is [System.Array]) {
+              $cur = $tData | Where-Object { $_.taskId -eq $TaskId } | Select-Object -Last 1
+            } elseif ($tData -and $tData.taskId -eq $TaskId) {
+              $cur = $tData
+            }
+            if ($cur -and $cur.progress -and $cur.progress -ne $lastLine) {
+              $lastLine = $cur.progress
+              $preview = if ($lastLine.Length -gt 90) { $lastLine.Substring(0, 87) + "..." } else { $lastLine }
+              Write-Output "[WAIT-JOB +${elapsed}s] $preview"
+            }
+          } catch {}
+        }
+      }
       Write-Output "[WAIT-JOB] Process PID $targetPid exited cleanly."
     } catch {
       Write-Error "[WAIT-JOB] Process wait error or timeout: $_"
