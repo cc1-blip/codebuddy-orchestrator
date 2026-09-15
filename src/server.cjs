@@ -364,7 +364,7 @@ function getSessionUsageStats(targetCwd, sessionId, startTimestamp = 0) {
   return null;
 }
 
-function formatUsageSummaryCard(stats, durationMs, modelName, sessionId) {
+function formatUsageSummaryCard(taskStats, durationMs, modelName, sessionId, sessionStats = null) {
   const durationSec = (durationMs / 1000).toFixed(1);
   const timeStr = durationMs >= 60000
     ? `${Math.floor(durationMs / 60000)} 分 ${Math.round((durationMs % 60000) / 1000)} 秒 (${durationSec}s)`
@@ -372,7 +372,7 @@ function formatUsageSummaryCard(stats, durationMs, modelName, sessionId) {
 
   const sessionShort = sessionId ? sessionId.slice(-12) : '';
 
-  if (!stats) {
+  if (!taskStats) {
     return [
       '\n\n────────────────────────────────────────────────────',
       `📊 **CodeBuddy 执行统计** ${sessionShort ? `(会话: \`...${sessionShort}\`)` : ''}`,
@@ -382,23 +382,34 @@ function formatUsageSummaryCard(stats, durationMs, modelName, sessionId) {
     ].join('\n');
   }
 
-  const hitRate = stats.promptTokens > 0
-    ? ((stats.cacheHitTokens / stats.promptTokens) * 100).toFixed(1)
+  const hitRate = taskStats.promptTokens > 0
+    ? ((taskStats.cacheHitTokens / taskStats.promptTokens) * 100).toFixed(1)
     : '0.0';
 
   const lines = [
     '\n\n────────────────────────────────────────────────────',
     `📊 **CodeBuddy 执行消耗与性能统计** ${sessionShort ? `(会话: \`...${sessionShort}\`)` : ''}`,
     `* **生效模型**：\`${modelName}\``,
-    `* **实际耗时**：\`${timeStr}\`${stats.turnCount > 1 ? ` (共完成 \`${stats.turnCount}\` 轮链式交互)` : ''}`,
-    `* **缓存命中输入 (Cache Hit)**：\`${stats.cacheHitTokens.toLocaleString()}\` tokens (🔥 **命中率 ${hitRate}%**) `,
-    `* **新计算输入 (Cache Miss)**：\`${stats.cacheMissTokens.toLocaleString()}\` tokens`,
-    `* **生成输出 (Output)**：\`${stats.completionTokens.toLocaleString()}\` tokens${stats.thinkingTokens > 0 ? ` (含深度思考 \`${stats.thinkingTokens.toLocaleString()}\` tokens)` : ''}`,
-    `* **总交互量 (Total)**：\`${stats.totalTokens.toLocaleString()}\` tokens`,
+    `* **实际耗时**：\`${timeStr}\`${taskStats.turnCount > 1 ? ` (本轮完成 \`${taskStats.turnCount}\` 轮链式交互)` : ''}`,
+    '',
+    `#### ⚡ 本轮任务消耗 (Task Usage)`,
+    `* **缓存命中输入 (Cache Hit)**：\`${taskStats.cacheHitTokens.toLocaleString()}\` tokens (🔥 **命中率 ${hitRate}%**) `,
+    `* **新计算输入 (Cache Miss)**：\`${taskStats.cacheMissTokens.toLocaleString()}\` tokens`,
+    `* **生成输出 (Output)**：\`${taskStats.completionTokens.toLocaleString()}\` tokens${taskStats.thinkingTokens > 0 ? ` (含深度思考 \`${taskStats.thinkingTokens.toLocaleString()}\` tokens)` : ''}`,
+    `* **本轮总交互量 (Total)**：\`${taskStats.totalTokens.toLocaleString()}\` tokens`,
   ];
 
-  if (typeof stats.credit === 'number') {
-    lines.push(`* **算力消耗 (Credit)**：\`${stats.credit > 0 ? stats.credit.toFixed(2) : '0.00'}\` 点`);
+  if (typeof taskStats.credit === 'number') {
+    lines.push(`* **本轮算力消耗 (Credit)**：\`${taskStats.credit > 0 ? taskStats.credit.toFixed(2) : '0.00'}\` 点`);
+  }
+
+  if (sessionStats && (sessionStats.turnCount > taskStats.turnCount || sessionStats.totalTokens > taskStats.totalTokens)) {
+    lines.push(
+      '',
+      `#### 📈 会话全局累计 (Session Cumulative · 共 ${sessionStats.turnCount} 轮交互)`,
+      `* **累计总交互量**：\`${sessionStats.totalTokens.toLocaleString()}\` tokens`,
+      `* **累计算力消耗**：\`${sessionStats.credit > 0 ? sessionStats.credit.toFixed(2) : '0.00'}\` 点`
+    );
   }
 
   lines.push('────────────────────────────────────────────────────');
@@ -1717,8 +1728,9 @@ async function runPrompt(
           finalOutput = `> ⚠️ **模型自动故障接力通知**：\n> ${failoverNotices.join('\n> ')}\n\n` + finalOutput;
         }
         const durationMs = Date.now() - startTime;
-        const stats = getSessionUsageStats(resolvedCwd, targetSessionId, startTime);
-        finalOutput = finalOutput + formatUsageSummaryCard(stats, durationMs, curModel, targetSessionId);
+        const taskStats = getSessionUsageStats(resolvedCwd, targetSessionId, startTime);
+        const sessionStats = getSessionUsageStats(resolvedCwd, targetSessionId, 0);
+        finalOutput = finalOutput + formatUsageSummaryCard(taskStats, durationMs, curModel, targetSessionId, sessionStats);
         return finalOutput;
       }
 
@@ -1754,8 +1766,9 @@ async function runPrompt(
       // 若为执行超时且未启用自动切模型：原地保护已写入的代码半成品，直接向架构师交卷
       if (res.isTimeout && !failoverOnTimeout) {
         const durationMs = Date.now() - startTime;
-        const stats = getSessionUsageStats(resolvedCwd, targetSessionId, startTime);
-        const usageCard = formatUsageSummaryCard(stats, durationMs, curModel, targetSessionId);
+        const taskStats = getSessionUsageStats(resolvedCwd, targetSessionId, startTime);
+        const sessionStats = getSessionUsageStats(resolvedCwd, targetSessionId, 0);
+        const usageCard = formatUsageSummaryCard(taskStats, durationMs, curModel, targetSessionId, sessionStats);
         const timeoutNotice = [
           `> ⏱️ **任务达到单次执行预算上限 (${Math.round(timeoutMs / 1000)} 秒)**`,
           `> - **现场保护**：当前模型 \`${curModel}\` 已停止执行，**工作区所有已写入的代码与测试文件已完整保全**；`,
