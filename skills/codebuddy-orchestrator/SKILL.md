@@ -38,9 +38,15 @@ When launching an asynchronous task (`async: true`):
   - On macOS/Linux: Run `bash <path>/wait-job.sh --task-id <id> --process-id <pid>`.
 - The OS kernel will instantly unblock the calling process the millisecond the worker process exits.
 
-### 3. Model Ladder Failover & Alias Normalization
-- If the user explicitly mentions a model (e.g. "4.1" or "deepseek4.1"), it maps to `deepseek-v4.1-flash`.
-- If a model encounters a 429 quota limit or network timeout, the bridge automatically failovers to the next model in the ladder within the same session.
+### 3. Model Ladder Failover & Smart Timeout Preservation
+- **Alias Normalization & Task-specific Ladder**:
+  - Aliases are auto-corrected (e.g. `"4.1"` -> `"deepseek-v4.1-flash"`, `"hy4"` -> `"hy4-preview-f"`).
+  - Explicit per-task ladder: Pass `ladder: ["glm-5.3", "hy4-preview-f"]` or chain syntax in `model: "glm-5.3 -> hy4"`. This strictly overrides project presets without unwanted fallbacks.
+- **Decoupled Failover (Hard Error vs. Timeout)**:
+  - **Hard Errors (429 quota exhaustion, service down, network failures)**: Bridge seamlessly switches to the next candidate model in the ladder within the same session.
+  - **Execution Timeouts**: By default (`failover_on_timeout: false`), timeouts do NOT blindly switch models. All modified files and tests on disk are safely preserved, and a structured timeout progress card is returned to the Lead Architect for evaluation.
+- **Budget Expansion**:
+  - Asynchronous heavy tasks default to a 7200s (2 hours) execution budget. Customize via `timeout_seconds`.
 
 ### 4. Real-time Live Streaming Monitor (Generative UI & Zero-Token Observability)
 - When launching an asynchronous task (`async: true`), the response includes `monitorUrl` and `embedTag`.

@@ -6,7 +6,7 @@ param(
   [int]$ProcessId = 0,
 
   [Parameter(Mandatory=$false)]
-  [int]$TimeoutSeconds = 1200,
+  [int]$TimeoutSeconds = 7200,
 
   [Parameter(Mandatory=$false)]
   [string]$TasksFile = ""
@@ -40,8 +40,8 @@ if ([string]::IsNullOrWhiteSpace($TasksFile)) {
 
 # 1. Enforce minimum timeout to prevent accidental disguised polling
 if ($TimeoutSeconds -lt 600) {
-  Write-Warning "[WAIT-JOB] TimeoutSeconds ($TimeoutSeconds) is too short. Resetting to 1200s to enforce One-Shot wait policy."
-  $TimeoutSeconds = 1200
+  Write-Warning "[WAIT-JOB] TimeoutSeconds ($TimeoutSeconds) is too short. Resetting to 7200s to enforce One-Shot wait policy."
+  $TimeoutSeconds = 7200
 }
 
 # 2. Resolve target PID

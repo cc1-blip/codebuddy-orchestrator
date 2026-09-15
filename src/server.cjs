@@ -1415,19 +1415,52 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
   });
 }
 
-// --- 核心执行引擎：模型别名纠偏 + 模型梯队自愈 + 工程并发锁 ---
+// --- 核心执行引擎：模型别名纠偏 + 多模型接力阶梯 + 工程并发锁 ---
+function resolveCandidateModels(modelInput, ladderInput, resolvedCwd) {
+  // 1. 显式传入 ladder 数组
+  if (Array.isArray(ladderInput) && ladderInput.length > 0) {
+    const list = ladderInput.map(normalizeModel).filter(Boolean);
+    if (list.length > 0) return Array.from(new Set(list));
+  }
+
+  // 2. model 参数传入了多模型接力链语法 (逗号、斜杠、箭头，如 "glm-5.3 -> hy4" 或 "glm-5.3, hy4")
+  if (typeof modelInput === 'string' && /[,>/|]|\s*->\s*/.test(modelInput)) {
+    const parts = modelInput.split(/[,>/|]|\s*->\s*/).map((s) => s.trim()).filter(Boolean);
+    const list = parts.map(normalizeModel).filter(Boolean);
+    if (list.length > 0) return Array.from(new Set(list));
+  }
+
+  // 3. 单一指定模型
+  const normalizedSingle = normalizeModel(modelInput);
+  if (normalizedSingle) {
+    const candidateModels = [normalizedSingle];
+    // 将项目阶梯中的其它模型作为降级备选
+    const projectLadder = resolveProjectLadder(resolvedCwd);
+    for (const m of projectLadder) {
+      const normM = normalizeModel(m);
+      if (!candidateModels.includes(normM)) candidateModels.push(normM);
+    }
+    return candidateModels;
+  }
+
+  // 4. 默认采用当前工程的模型阶梯
+  return resolveProjectLadder(resolvedCwd);
+}
+
 async function runPrompt(
   prompt,
   model = null,
   cwd = process.cwd(),
   sessionId = null,
   newSession = false,
-  timeoutMs = 600000,
+  timeoutMs = 7200000,
   permissionMode = 'bypassPermissions',
   onProgress = null,
   isAlreadyLocked = false,
   onSpawn = null,
-  onLogLine = null
+  onLogLine = null,
+  ladder = null,
+  failoverOnTimeout = false
 ) {
   touchActivity();
   const startTime = Date.now();
@@ -1441,21 +1474,8 @@ async function runPrompt(
     targetSessionId = getProjectSessionId(resolvedCwd);
   }
 
-  // 1. 模型解析与别名纠偏策略
-  const normalizedInputModel = normalizeModel(model);
-  let candidateModels = [];
-
-  if (normalizedInputModel) {
-    candidateModels = [normalizedInputModel];
-    // 将项目阶梯中的其它模型作为降级备选
-    const projectLadder = resolveProjectLadder(resolvedCwd);
-    for (const m of projectLadder) {
-      const normM = normalizeModel(m);
-      if (!candidateModels.includes(normM)) candidateModels.push(normM);
-    }
-  } else {
-    candidateModels = resolveProjectLadder(resolvedCwd);
-  }
+  // 1. 模型解析与多模型接力阶梯决策
+  const candidateModels = resolveCandidateModels(model, ladder, resolvedCwd);
 
   // 2. 工程并发锁检查
   let weAcquiredLock = false;
@@ -1511,9 +1531,11 @@ async function runPrompt(
         throw new Error(res.details);
       }
 
-      // 检查是否可触发模型阶梯自愈接力：额度限流 / 执行超时 / 模型不可用 / 网络故障
-      const isFailoverCandidate = res.isQuota || res.isTimeout || res.isModelError || res.isNetworkError;
-      if (isFailoverCandidate && i < candidateModels.length - 1) {
+      // 检查是否可触发模型阶梯自愈接力：硬故障 (429限流/欠费、模型不可用、网络故障) 或 (用户显式允许的超时)
+      const isHardError = res.isQuota || res.isModelError || res.isNetworkError;
+      const canFailover = isHardError || (res.isTimeout && failoverOnTimeout);
+
+      if (canFailover && i < candidateModels.length - 1) {
         const nextModel = candidateModels[i + 1];
         const reasons = [];
         if (res.isQuota) reasons.push('额度不足或触发限流 (429)');
@@ -1527,6 +1549,21 @@ async function runPrompt(
           try { onLogLine(`⚡ [FAILOVER] ${notice}`, 'info'); } catch {}
         }
         continue;
+      }
+
+      // 若为执行超时且未启用自动切模型：原地保护已写入的代码半成品，直接向架构师交卷
+      if (res.isTimeout && !failoverOnTimeout) {
+        const durationMs = Date.now() - startTime;
+        const stats = getSessionUsageStats(resolvedCwd, targetSessionId, startTime);
+        const usageCard = formatUsageSummaryCard(stats, durationMs, curModel, targetSessionId);
+        const timeoutNotice = [
+          `> ⏱️ **任务达到单次执行预算上限 (${Math.round(timeoutMs / 1000)} 秒)**`,
+          `> - **现场保护**：当前模型 \`${curModel}\` 已停止执行，**工作区所有已写入的代码与测试文件已完整保全**；`,
+          `> - **决策隔离**：为防止跨模型改动破坏半成品上下文，调度器**未自动切换其他模型**；`,
+          `> - **建议操作**：请架构师审查工作区半成品；若需继续，可在同一会话中直接增量推进或调大 \`timeout_seconds\`。`,
+        ].join('\n');
+        const partialSnippet = res.details ? `\n\n### 终止前最后输出摘要\n\`\`\`text\n${res.details.slice(0, 1000)}\n\`\`\`\n` : '';
+        return `${timeoutNotice}${partialSnippet}\n\n${usageCard}`;
       }
 
       lastError = res.details;
@@ -1545,8 +1582,8 @@ async function runPrompt(
 async function startAsyncTask(args, timeoutMs) {
   touchActivity();
   const resolvedCwd = path.resolve(args.cwd || process.cwd());
-  const normalizedInput = normalizeModel(args.model);
-  const targetModel = normalizedInput || resolveProjectLadder(resolvedCwd)[0];
+  const candidateModels = resolveCandidateModels(args.model, args.ladder, resolvedCwd);
+  const targetModel = candidateModels[0];
   const targetSessionId = args.new_session
     ? `${getProjectSessionId(resolvedCwd)}-${Date.now().toString(36)}`
     : (args.session_id || getProjectSessionId(resolvedCwd));
@@ -1623,7 +1660,9 @@ async function startAsyncTask(args, timeoutMs) {
             taskRecord.currentAction = act;
           }
           appendTaskLog(taskId, line, type, act);
-        }
+        },
+        args.ladder || null,
+        args.failover_on_timeout === true
       );
       taskRecord.status = 'completed';
       taskRecord.output = result;
@@ -1652,15 +1691,16 @@ async function startAsyncTask(args, timeoutMs) {
   const targetPs1 = fs.existsSync(codexPs1) ? codexPs1 : localPs1;
   const localSh = path.resolve(__dirname, '..', 'scripts', 'wait-job.sh');
 
+  const timeoutSec = Math.ceil((timeoutMs || 7200000) / 1000);
   let waitCmd = '';
   if (isWin) {
     waitCmd = spawnedPid
-      ? `powershell -ExecutionPolicy Bypass -File "${targetPs1}" -TaskId "${taskId}" -ProcessId ${spawnedPid}`
-      : `powershell -ExecutionPolicy Bypass -File "${targetPs1}" -TaskId "${taskId}"`;
+      ? `powershell -ExecutionPolicy Bypass -File "${targetPs1}" -TaskId "${taskId}" -ProcessId ${spawnedPid} -TimeoutSeconds ${timeoutSec}`
+      : `powershell -ExecutionPolicy Bypass -File "${targetPs1}" -TaskId "${taskId}" -TimeoutSeconds ${timeoutSec}`;
   } else {
     waitCmd = spawnedPid
-      ? `bash "${localSh}" --task-id "${taskId}" --process-id ${spawnedPid}`
-      : `bash "${localSh}" --task-id "${taskId}"`;
+      ? `bash "${localSh}" --task-id "${taskId}" --process-id ${spawnedPid} --timeout ${timeoutSec}`
+      : `bash "${localSh}" --task-id "${taskId}" --timeout ${timeoutSec}`;
   }
 
   const monitorPort = getActiveMonitorPort();
@@ -1673,6 +1713,9 @@ async function startAsyncTask(args, timeoutMs) {
     pid: spawnedPid || null,
     sessionId: targetSessionId,
     model: targetModel,
+    ladder: candidateModels,
+    failoverOnTimeout: args.failover_on_timeout === true,
+    timeoutSeconds: timeoutSec,
     cwd: resolvedCwd,
     monitorUrl: monitorHttpUrl,
     embedTag: monitorEmbedTag,
@@ -1792,12 +1835,21 @@ const TOOLS = [
         prompt: { type: 'string', description: '发送给模型的任务描述或 Prompt' },
         model: {
           type: 'string',
-          description: '显式指定的模型 ID。支持别名自动纠偏 (如 "4.1" 或 "deepseek4.1" 自动映射至 "deepseek-v4.1-flash"；"hy4" 自动映射至 "hy4-preview-f"；若用户提到 4.1 严禁自行替换为 pro)。缺省时自动按当前项目的模型阶梯首选运行',
+          description: '显式指定的模型 ID。支持别名纠偏 (如 "4.1" 映射至 "deepseek-v4.1-flash"；"hy4" 映射至 "hy4-preview-f") 及接力链语法 (如 "glm-5.3 -> hy4")。缺省时自动按当前项目的模型阶梯首选运行',
+        },
+        ladder: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '本次任务专属的模型接力阶梯（优先级最高），例如 ["glm-5.3", "hy4-preview-f"]。发生 429/欠费/宕机故障时严格按此顺序降级接力，不回退至项目默认兜底',
+        },
+        failover_on_timeout: {
+          type: 'boolean',
+          description: '当执行超时时是否自动降级切换至下一模型。默认 false（智能现场保护：保留所有已写入文件与测试，向架构师汇报摘要，防止盲目换模型重做或破坏半成品）。设为 true 时将在超时后尝试下一模型',
         },
         cwd: { type: 'string', description: '执行工作区目录，默认为当前工程根目录' },
         session_id: { type: 'string', description: '指定会话 ID；缺省时自动使用当前工程专属的固定会话 ID' },
         new_session: { type: 'boolean', description: '是否为当前工程创建全新独立会话（重置历史上下文）' },
-        timeout_seconds: { type: 'number', description: '最大执行超时时间 (秒)，默认 600 秒 (10 分钟)' },
+        timeout_seconds: { type: 'number', description: '最大执行超时时间 (秒)。异步长任务模式 (async=true) 默认 7200 秒 (2小时)；同步模式默认 600 秒 (10 分钟)' },
         permission_mode: {
           type: 'string',
           description: '权限模式，默认 bypassPermissions (自动放行代码修改与单测，避免挂起阻塞)',
@@ -1935,7 +1987,7 @@ async function handleRequest(request) {
       if (name === 'codebuddy_run') {
         const timeoutMs = typeof args.timeout_seconds === 'number' && args.timeout_seconds > 0
           ? args.timeout_seconds * 1000
-          : 600000; // 默认 10 分钟
+          : (args.async === true ? 7200000 : 600000); // 异步长任务默认 2 小时 (7200s)，同步模式默认 10 分钟 (600s)
 
         if (args.async === true) {
           const res = await startAsyncTask(args, timeoutMs);
@@ -1953,7 +2005,13 @@ async function handleRequest(request) {
           args.session_id,
           args.new_session,
           timeoutMs,
-          args.permission_mode || 'bypassPermissions'
+          args.permission_mode || 'bypassPermissions',
+          null, // onProgress
+          false, // isAlreadyLocked
+          null, // onSpawn
+          null, // onLogLine
+          args.ladder || null,
+          args.failover_on_timeout === true
         );
         return {
           jsonrpc: '2.0',

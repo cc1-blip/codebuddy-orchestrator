@@ -10,7 +10,18 @@
       },
       "model": {
         "type": "string",
-        "description": "显式指定的模型 ID。支持别名自动纠偏 (如 \"4.1\" 或 \"deepseek4.1\" 自动映射至 \"deepseek-v4.1-flash\"；\"hy4\" 自动映射至 \"hy4-preview-f\"；若用户提到 4.1 严禁自行替换为 pro)。缺省时自动按当前项目的模型阶梯首选运行"
+        "description": "显式指定的模型 ID。支持别名纠偏 (如 \"4.1\" 映射至 \"deepseek-v4.1-flash\"；\"hy4\" 映射至 \"hy4-preview-f\") 及接力链语法 (如 \"glm-5.3 -> hy4\")。缺省时自动按当前项目的模型阶梯首选运行"
+      },
+      "ladder": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "本次任务专属的模型接力阶梯（优先级最高），例如 [\"glm-5.3\", \"hy4-preview-f\"]。发生 429/欠费/宕机故障时严格按此顺序降级接力，不回退至项目默认兜底"
+      },
+      "failover_on_timeout": {
+        "type": "boolean",
+        "description": "当执行超时时是否自动降级切换至下一模型。默认 false（智能现场保护：保留所有已写入文件与测试，向架构师汇报摘要，防止盲目换模型重做或破坏半成品）。设为 true 时将在超时后尝试下一模型"
       },
       "cwd": {
         "type": "string",
@@ -26,7 +37,7 @@
       },
       "timeout_seconds": {
         "type": "number",
-        "description": "最大执行超时时间 (秒)，默认 600 秒 (10 分钟)"
+        "description": "最大执行超时时间 (秒)。异步长任务模式 (async=true) 默认 7200 秒 (2小时)；同步模式默认 600 秒 (10 分钟)"
       },
       "permission_mode": {
         "type": "string",

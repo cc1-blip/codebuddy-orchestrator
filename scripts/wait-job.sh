@@ -8,7 +8,7 @@ set -euo pipefail
 
 TASK_ID=""
 TARGET_PID=""
-TIMEOUT_SEC=1200
+TIMEOUT_SEC=7200
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
