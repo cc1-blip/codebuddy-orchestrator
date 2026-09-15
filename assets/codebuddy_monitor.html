@@ -221,10 +221,10 @@
           contentSpan.className += ' text-rose-400';
         } else if (/\[diff\]|\+\+\+|---/i.test(lineText)) {
           contentSpan.className += ' text-emerald-400';
-        } else if (/\[tool|calling tool|executing/i.test(lineText)) {
-          contentSpan.className += ' text-cyan-300 font-semibold';
-        } else if (/thinking|思考/i.test(lineText)) {
-          contentSpan.className += ' text-purple-300 italic';
+        } else if (type === 'tool' || /\[tool|calling tool|executing|\[Read\]|\[Edit\]|\[Write\]|\[Shell\]/i.test(lineText)) {
+          contentSpan.className += ' text-cyan-300 font-semibold bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40 whitespace-pre-wrap';
+        } else if (type === 'thinking' || /thinking|思考/i.test(lineText)) {
+          contentSpan.className += ' text-purple-300 italic bg-purple-950/30 px-2 py-1 rounded border border-purple-900/40 whitespace-pre-wrap leading-relaxed';
         } else if (type === 'info') {
           contentSpan.className += ' text-amber-300 font-medium';
         } else {

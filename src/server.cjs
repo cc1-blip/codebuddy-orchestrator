@@ -1170,12 +1170,15 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
       '--session-id', sessionId,
       '-y',
       '--permission-mode', permissionMode,
+      '--output-format', 'stream-json',
     ];
 
     let stdoutData = '';
     let stderrData = '';
     let timedOut = false;
     let timer = null;
+    let finalOutput = '';
+    let isErrorResult = false;
 
     const child = spawn(NODE_BIN, args, {
       cwd,
@@ -1199,16 +1202,139 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
 
     const rlOut = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rlOut.on('line', (line) => {
-      stdoutData += line + '\n';
       const trimmed = line.trim();
-      if (trimmed) {
-        log(`[CLI stdout:${model}] ${trimmed.slice(0, 160)}`);
-        if (typeof onProgress === 'function') {
-          try { onProgress(trimmed); } catch {}
+      if (!trimmed) return;
+
+      stdoutData += line + '\n';
+
+      // 尝试解析 stream-json NDJSON 实时事件
+      let event = null;
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          event = JSON.parse(trimmed);
+        } catch {}
+      }
+
+      if (event && event.type) {
+        // 1. 系统初始化事件
+        if (event.type === 'system' && event.subtype === 'init') {
+          const initMsg = `🚀 [SESSION] 会话建立: model=${event.model || model}, session=${event.session_id || sessionId}`;
+          log(`[CLI stream:${model}] ${initMsg}`);
+          if (typeof onLogLine === 'function') onLogLine(initMsg, 'info', '🚀 任务开始执行');
+          return;
         }
-        if (typeof onLogLine === 'function') {
-          try { onLogLine(trimmed, 'stdout'); } catch {}
+
+        // 2. 助手生成事件 (深度思考、工具调用、输出文本)
+        if (event.type === 'assistant' && event.message && Array.isArray(event.message.content)) {
+          for (const block of event.message.content) {
+            if (block.type === 'thinking' && block.thinking) {
+              const th = block.thinking.trim();
+              log(`[CLI thinking:${model}] ${th.slice(0, 160)}`);
+              if (typeof onProgress === 'function') {
+                try { onProgress(th.slice(0, 100)); } catch {}
+              }
+              if (typeof onLogLine === 'function') {
+                onLogLine(`💭 ${th}`, 'thinking', '🤔 正在深入思考规划...');
+              }
+            } else if (block.type === 'tool_use') {
+              let actionSummary = `🔧 调用工具: ${block.name}`;
+              let detail = '';
+              const inp = block.input || {};
+              if (block.name === 'Read') {
+                const file = inp.file_path || inp.path || '';
+                actionSummary = `🔍 正在读取: ${path.basename(file) || file}`;
+                detail = `🔍 [Read] 读取文件: ${file}${inp.limit ? ` (前 ${inp.limit} 行)` : ''}`;
+              } else if (block.name === 'Edit') {
+                const file = inp.file_path || inp.path || '';
+                actionSummary = `✏️ 正在编辑: ${path.basename(file) || file}`;
+                detail = `✏️ [Edit] 编辑文件: ${file}`;
+              } else if (block.name === 'Write') {
+                const file = inp.file_path || inp.path || '';
+                actionSummary = `📝 正在写入: ${path.basename(file) || file}`;
+                detail = `📝 [Write] 创建/覆盖文件: ${file}`;
+              } else if (block.name === 'Bash' || block.name === 'PowerShell') {
+                const cmd = (inp.command || '').trim();
+                actionSummary = `💻 执行终端命令: ${cmd.slice(0, 40)}`;
+                detail = `💻 [Shell] 执行终端命令: ${cmd}`;
+              } else if (block.name === 'Glob' || block.name === 'Grep') {
+                const pat = inp.pattern || inp.path || '';
+                actionSummary = `🔎 搜索文件: ${pat}`;
+                detail = `🔎 [${block.name}] 检索模式: ${pat}`;
+              } else {
+                detail = `🔧 [Tool:${block.name}] ${JSON.stringify(inp).slice(0, 200)}`;
+              }
+              log(`[CLI tool:${model}] ${detail.slice(0, 160)}`);
+              if (typeof onProgress === 'function') {
+                try { onProgress(actionSummary); } catch {}
+              }
+              if (typeof onLogLine === 'function') {
+                onLogLine(detail, 'tool', actionSummary);
+              }
+            } else if (block.type === 'text' && block.text) {
+              const textContent = block.text.trim();
+              if (textContent) {
+                log(`[CLI text:${model}] ${textContent.slice(0, 160)}`);
+                if (typeof onProgress === 'function') {
+                  try { onProgress(textContent.slice(0, 100)); } catch {}
+                }
+                if (typeof onLogLine === 'function') {
+                  onLogLine(textContent, 'stdout', '📝 输出生成内容');
+                }
+              }
+            }
+          }
+          return;
         }
+
+        // 3. 用户/工具返回事件
+        if (event.type === 'user' && event.message && Array.isArray(event.message.content)) {
+          for (const block of event.message.content) {
+            if (block.type === 'tool_result') {
+              let resText = '';
+              if (typeof block.content === 'string') {
+                resText = block.content;
+              } else if (Array.isArray(block.content)) {
+                resText = block.content.map((c) => c.text || '').join('\n');
+              }
+              const snippet = resText.trim().slice(0, 260);
+              if (snippet) {
+                if (typeof onLogLine === 'function') {
+                  onLogLine(`↪️ [工具返回] ${snippet}`, 'info');
+                }
+              }
+            }
+          }
+          return;
+        }
+
+        // 4. 任务最终结果事件
+        if (event.type === 'result') {
+          if (event.result) {
+            finalOutput = event.result;
+          }
+          if (event.is_error) {
+            isErrorResult = true;
+          }
+          if (event.usage || event.modelUsage) {
+            const usageInfo = `📊 [Token统计] 输入: ${event.usage?.input_tokens || 0}, 输出: ${event.usage?.output_tokens || 0}, 耗时: ${Math.round((event.duration_ms || 0) / 1000)}s`;
+            if (typeof onLogLine === 'function') {
+              onLogLine(usageInfo, 'info', '📊 任务执行完成');
+            }
+          }
+          return;
+        }
+
+        // 其它内部事件静默跳过
+        return;
+      }
+
+      // 非 JSON 事件（普通文本输出降级兼容）
+      log(`[CLI stdout:${model}] ${trimmed.slice(0, 160)}`);
+      if (typeof onProgress === 'function') {
+        try { onProgress(trimmed); } catch {}
+      }
+      if (typeof onLogLine === 'function') {
+        try { onLogLine(trimmed, 'stdout'); } catch {}
       }
     });
 
@@ -1252,8 +1378,10 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
         });
       }
 
-      if (code !== 0) {
-        const detail = (stderrData || stdoutData || `进程退出码: ${code}`).trim();
+      const effectiveOutput = (finalOutput || stdoutData).trim();
+
+      if (code !== 0 || isErrorResult) {
+        const detail = (stderrData || effectiveOutput || `进程退出码: ${code}`).trim();
         log(`[CLI 执行单次] 失败 (model=${model}, code=${code}): ${detail.slice(0, 300)}`);
         return resolve({
           success: false,
@@ -1266,7 +1394,7 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
         });
       }
 
-      log(`[CLI 执行单次] 成功 (model=${model}), 输出长度: ${stdoutData.length}`);
+      log(`[CLI 执行单次] 成功 (model=${model}), 输出长度: ${effectiveOutput.length}`);
 
       // 若 WebUI 在线，同步将会话重命名为工程语义清晰的标题
       try {
@@ -1281,7 +1409,7 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
 
       resolve({
         success: true,
-        output: stdoutData.trim(),
+        output: effectiveOutput,
       });
     });
   });
@@ -1489,12 +1617,12 @@ async function startAsyncTask(args, timeoutMs) {
           spawnResolver(pid);
           appendTaskLog(taskId, `[PROCESS] CLI 进程已就绪 (PID: ${pid})`, 'info', '🚀 进程已拉起');
         },
-        (line, type) => {
-          const action = extractActionFromLine(line);
-          if (action) {
-            taskRecord.currentAction = action;
+        (line, type, action = null) => {
+          const act = action || extractActionFromLine(line);
+          if (act) {
+            taskRecord.currentAction = act;
           }
-          appendTaskLog(taskId, line, type, action);
+          appendTaskLog(taskId, line, type, act);
         }
       );
       taskRecord.status = 'completed';
