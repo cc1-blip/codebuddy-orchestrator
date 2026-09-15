@@ -1,6 +1,6 @@
 {
   "name": "codebuddy-orchestrator",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Enterprise-grade Dual-Agent orchestration bridge connecting OpenAI Codex, Google Antigravity, and Claude with Tencent CodeBuddy models using zero-polling OS kernel waits.",
   "main": "src/server.cjs",
   "bin": {
