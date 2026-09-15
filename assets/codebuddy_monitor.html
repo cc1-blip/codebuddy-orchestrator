@@ -103,9 +103,17 @@
     <!-- 4. 底部交互与资源指标栏 (Footer Controls) -->
     <div class="px-3 py-2 bg-slate-900/80 border-t border-[var(--border)] flex items-center justify-between gap-2 shrink-0 text-xs">
       <!-- 左侧：指标或行数统计 -->
-      <div class="flex items-center gap-3 text-[11px] text-slate-400">
-        <span id="lineCount">共 0 行</span>
-        <span id="tokenStats" class="hidden sm:inline text-slate-500">• 0 tokens</span>
+      <div class="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap select-none">
+        <span id="lineCount" class="font-mono">共 0 行</span>
+        <span class="text-slate-600">·</span>
+        <span id="tokenStats" class="font-mono text-sky-400 flex items-center gap-1 cursor-pointer hover:underline" title="点击切换查看：本轮任务 / 会话累计">
+          ⚡ <span id="tokenVal">0</span> tokens
+        </span>
+        <span class="text-slate-600">·</span>
+        <span id="creditStats" class="font-mono text-amber-300 font-medium flex items-center gap-1 cursor-pointer hover:underline" title="点击切换查看：本轮任务 / 会话累计">
+          💰 <span id="creditVal">0.00</span> 积分
+        </span>
+        <span id="hitRateBadge" class="hidden text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50"></span>
       </div>
 
       <!-- 右侧：交互按钮组 -->
@@ -150,6 +158,10 @@
       const btnScrollBottom = document.getElementById('btnScrollBottom');
       const lineCount = document.getElementById('lineCount');
       const tokenStats = document.getElementById('tokenStats');
+      const tokenVal = document.getElementById('tokenVal');
+      const creditStats = document.getElementById('creditStats');
+      const creditVal = document.getElementById('creditVal');
+      const hitRateBadge = document.getElementById('hitRateBadge');
       const btnCopy = document.getElementById('btnCopy');
       const btnWebUI = document.getElementById('btnWebUI');
       const btnKill = document.getElementById('btnKill');
@@ -163,12 +175,88 @@
       let isTaskRunning = true;
       let allLogsText = '';
 
+      let showSessionTotal = false; // false = 本轮任务, true = 会话累计
+      let latestUsage = {
+        taskTokens: 0,
+        taskCredit: 0,
+        sessionTokens: 0,
+        sessionCredit: 0,
+        cacheHitTokens: 0,
+        promptTokens: 0,
+      };
+
       // 格式化秒数
       function formatTime(sec) {
         const m = Math.floor(sec / 60).toString().padStart(2, '0');
         const s = (sec % 60).toString().padStart(2, '0');
         return `${m}:${s}`;
       }
+
+      function formatTokens(num) {
+        if (!num || num <= 0) return '0';
+        if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+        return String(num);
+      }
+
+      function formatCredit(num) {
+        if (!num || num <= 0) return '0.00';
+        return Number(num).toFixed(2);
+      }
+
+      function updateUsageUI(data) {
+        if (!data) return;
+        if (data.taskUsage) {
+          latestUsage.taskTokens = data.taskUsage.totalTokens || 0;
+          latestUsage.taskCredit = data.taskUsage.credit || 0;
+          latestUsage.cacheHitTokens = data.taskUsage.cacheHitTokens || 0;
+          latestUsage.promptTokens = data.taskUsage.promptTokens || 0;
+        }
+        if (data.sessionUsage) {
+          latestUsage.sessionTokens = data.sessionUsage.totalTokens || latestUsage.taskTokens;
+          latestUsage.sessionCredit = data.sessionUsage.credit || latestUsage.taskCredit;
+        }
+        if (typeof data.taskTokens === 'number') latestUsage.taskTokens = data.taskTokens;
+        if (typeof data.taskCredit === 'number') latestUsage.taskCredit = data.taskCredit;
+        if (typeof data.sessionTokens === 'number') latestUsage.sessionTokens = data.sessionTokens;
+        if (typeof data.sessionCredit === 'number') latestUsage.sessionCredit = data.sessionCredit;
+        if (typeof data.cacheHitTokens === 'number') latestUsage.cacheHitTokens = data.cacheHitTokens;
+        if (typeof data.promptTokens === 'number') latestUsage.promptTokens = data.promptTokens;
+
+        const curTokens = showSessionTotal ? latestUsage.sessionTokens : latestUsage.taskTokens;
+        const curCredit = showSessionTotal ? latestUsage.sessionCredit : latestUsage.taskCredit;
+
+        if (tokenVal) tokenVal.textContent = formatTokens(curTokens);
+        if (creditVal) creditVal.textContent = formatCredit(curCredit);
+
+        const scopeLabel = showSessionTotal ? '会话累计' : '本轮任务';
+        const toggleHint = '（点击切换：' + (showSessionTotal ? '看本轮任务' : '看会话累计') + '）';
+
+        if (tokenStats) {
+          tokenStats.title = `【${scopeLabel}】消耗：${(curTokens || 0).toLocaleString()} tokens ${toggleHint}`;
+        }
+        if (creditStats) {
+          creditStats.title = `【${scopeLabel}】消耗：${Number(curCredit || 0).toFixed(4)} 积分 ${toggleHint}`;
+        }
+
+        if (hitRateBadge) {
+          if (latestUsage.promptTokens > 0 && latestUsage.cacheHitTokens > 0) {
+            const hitRate = ((latestUsage.cacheHitTokens / latestUsage.promptTokens) * 100).toFixed(1);
+            hitRateBadge.textContent = `⚡ ${hitRate}% 命中`;
+            hitRateBadge.title = `提示词缓存命中率: ${hitRate}% (节省Token并显著提速)`;
+            hitRateBadge.classList.remove('hidden');
+          } else {
+            hitRateBadge.classList.add('hidden');
+          }
+        }
+      }
+
+      function toggleUsageScope() {
+        showSessionTotal = !showSessionTotal;
+        updateUsageUI({});
+      }
+      if (tokenStats) tokenStats.addEventListener('click', toggleUsageScope);
+      if (creditStats) creditStats.addEventListener('click', toggleUsageScope);
 
       function startTimer(baseStart) {
         if (timerInterval) clearInterval(timerInterval);
@@ -325,9 +413,19 @@
               }
             }
             if (data.startedAt) startTimer(data.startedAt);
+            if (data.usage) {
+              updateUsageUI(data.usage);
+            }
             if (data.status && data.status !== 'running') {
               updateStatus(data.status, data.error);
             }
+          } catch {}
+        });
+
+        eventSource.addEventListener('usage', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            updateUsageUI(data);
           } catch {}
         });
 
@@ -365,6 +463,9 @@
               if (json.task.status && json.task.status !== 'running') {
                 updateStatus(json.task.status, json.task.error);
               }
+            }
+            if (json.taskUsage || json.sessionUsage) {
+              updateUsageUI({ taskUsage: json.taskUsage, sessionUsage: json.sessionUsage });
             }
           }
         } catch {}
@@ -421,6 +522,17 @@
         }
       });
 
+      async function fetchUsage(tid) {
+        if (!tid) return;
+        try {
+          const res = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(tid)}/usage`);
+          if (res.ok) {
+            const data = await res.json();
+            updateUsageUI(data);
+          }
+        } catch {}
+      }
+
       // 初始化启动逻辑
       async function init() {
         startTimer(Date.now());
@@ -439,6 +551,12 @@
 
         if (taskId) {
           taskBadge.textContent = `#${taskId.slice(-8)}`;
+          fetchUsage(taskId);
+          setInterval(() => {
+            if (isTaskRunning && taskId) {
+              fetchUsage(taskId);
+            }
+          }, 3000);
           connectSSE(taskId);
         } else {
           appendLog('[SYSTEM] 未检测到活跃的 Task ID。请从 codebuddy_run 派发后自动呼出本监考台。', 'info');

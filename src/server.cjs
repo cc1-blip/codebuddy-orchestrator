@@ -729,10 +729,14 @@ function handleMonitorHttpRequest(req, res) {
       res.write(`data: ${JSON.stringify(item)}\n\n`);
     }
 
-    // 2. 回显初始状态
+    // 2. 回显初始状态与实时资源消耗
     loadTasks();
     const task = runningTasks.get(taskId);
+    let taskStats = null;
+    let sessionStats = null;
     if (task) {
+      taskStats = getSessionUsageStats(task.cwd, task.sessionId, task.startedAt);
+      sessionStats = getSessionUsageStats(task.cwd, task.sessionId, 0) || taskStats;
       res.write(`event: init\ndata: ${JSON.stringify({
         taskId: task.taskId,
         status: task.status,
@@ -743,6 +747,14 @@ function handleMonitorHttpRequest(req, res) {
         endedAt: task.endedAt,
         progress: task.progress,
         error: task.error,
+        usage: {
+          taskTokens: taskStats?.totalTokens || 0,
+          taskCredit: taskStats?.credit || 0,
+          sessionTokens: sessionStats?.totalTokens || 0,
+          sessionCredit: sessionStats?.credit || 0,
+          cacheHitTokens: taskStats?.cacheHitTokens || 0,
+          promptTokens: taskStats?.promptTokens || 0,
+        },
       })}\n\n`);
       if (task.status !== 'running') {
         res.write(`event: status\ndata: ${JSON.stringify({ status: task.status })}\n\n`);
@@ -755,6 +767,7 @@ function handleMonitorHttpRequest(req, res) {
     let activeFilePath = fs.existsSync(jsonlPath) ? jsonlPath : (fs.existsSync(logPath) ? logPath : null);
     let lastFileOffset = 0;
     let leftover = '';
+    let usageTick = 0;
 
     if (activeFilePath && fs.existsSync(activeFilePath)) {
       try {
@@ -764,6 +777,27 @@ function handleMonitorHttpRequest(req, res) {
 
     const diskTailTimer = setInterval(() => {
       try {
+        usageTick++;
+        // 每 8 次循环 (约 2 秒) 广播最新 Token 与积分消耗
+        if (usageTick % 8 === 0) {
+          loadTasks();
+          const curTask = runningTasks.get(taskId);
+          if (curTask) {
+            const tStats = getSessionUsageStats(curTask.cwd, curTask.sessionId, curTask.startedAt);
+            const sStats = getSessionUsageStats(curTask.cwd, curTask.sessionId, 0) || tStats;
+            if (tStats) {
+              res.write(`event: usage\ndata: ${JSON.stringify({
+                taskTokens: tStats.totalTokens || 0,
+                taskCredit: tStats.credit || 0,
+                sessionTokens: sStats?.totalTokens || 0,
+                sessionCredit: sStats?.credit || 0,
+                cacheHitTokens: tStats.cacheHitTokens || 0,
+                promptTokens: tStats.promptTokens || 0,
+              })}\n\n`);
+            }
+          }
+        }
+
         if (!activeFilePath || !fs.existsSync(activeFilePath)) {
           activeFilePath = fs.existsSync(jsonlPath) ? jsonlPath : (fs.existsSync(logPath) ? logPath : null);
           if (activeFilePath) {
@@ -851,12 +885,21 @@ function handleMonitorHttpRequest(req, res) {
       }
     } catch {}
 
+    let taskStats = null;
+    let sessionStats = null;
+    if (task) {
+      taskStats = getSessionUsageStats(task.cwd, task.sessionId, task.startedAt);
+      sessionStats = getSessionUsageStats(task.cwd, task.sessionId, 0) || taskStats;
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       taskId,
       task,
       bufferedCount: buf.length,
       logs: buf,
+      taskUsage: taskStats,
+      sessionUsage: sessionStats,
       rawLogLength: diskLogs ? diskLogs.length : 0,
     }));
     return;
@@ -869,6 +912,34 @@ function handleMonitorHttpRequest(req, res) {
     const result = abortTask(taskId);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  // 7. Token 与积分用量查询: GET /api/tasks/:id/usage
+  const usageMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/usage$/);
+  if (usageMatch && req.method === 'GET') {
+    const taskId = decodeURIComponent(usageMatch[1]);
+    loadTasks();
+    const task = runningTasks.get(taskId);
+    if (!task) {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Task not found' }));
+      return;
+    }
+    const taskStats = getSessionUsageStats(task.cwd, task.sessionId, task.startedAt) || {
+      totalTokens: 0,
+      credit: 0,
+      cacheHitTokens: 0,
+      promptTokens: 0,
+      turnCount: 0,
+    };
+    const sessionStats = getSessionUsageStats(task.cwd, task.sessionId, 0) || taskStats;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      taskId,
+      taskUsage: taskStats,
+      sessionUsage: sessionStats,
+    }));
     return;
   }
 
