@@ -478,14 +478,16 @@ function appendTaskLog(taskId, line, type = 'stdout', action = null) {
     buf.shift();
   }
 
-  // 2. 磁盘追加写
+  // 2. 磁盘追加写 (写入 .jsonl 用于跨进程秒级 tail 回放，写入 .log 便于直接查看)
   try {
+    const jsonlFile = path.join(TASK_LOGS_DIR, `${taskId}.jsonl`);
+    fs.appendFileSync(jsonlFile, JSON.stringify(entry) + '\n', 'utf8');
     const logFile = path.join(TASK_LOGS_DIR, `${taskId}.log`);
     const dateStr = new Date(entry.time).toTimeString().split(' ')[0];
     fs.appendFileSync(logFile, `[${dateStr}] [${type.toUpperCase()}] ${line}\n`, 'utf8');
   } catch {}
 
-  // 3. 广播给 SSE 订阅者
+  // 3. 广播给 SSE 订阅者 (本进程内直连)
   const subs = taskSubscribers.get(taskId);
   if (subs && subs.size > 0) {
     const payload = `data: ${JSON.stringify(entry)}\n\n`;
@@ -497,6 +499,58 @@ function appendTaskLog(taskId, line, type = 'stdout', action = null) {
       }
     }
   }
+}
+
+// 跨进程读取磁盘任务日志历史
+function readTaskLogsFromDisk(taskId) {
+  const jsonlPath = path.join(TASK_LOGS_DIR, `${taskId}.jsonl`);
+  const logPath = path.join(TASK_LOGS_DIR, `${taskId}.log`);
+  const entries = [];
+
+  if (fs.existsSync(jsonlPath)) {
+    try {
+      const content = fs.readFileSync(jsonlPath, 'utf8');
+      const lines = content.split('\n');
+      for (const l of lines) {
+        if (!l.trim()) continue;
+        try {
+          entries.push(JSON.parse(l));
+        } catch {}
+      }
+      if (entries.length > 0) return entries;
+    } catch {}
+  }
+
+  if (fs.existsSync(logPath)) {
+    try {
+      const content = fs.readFileSync(logPath, 'utf8');
+      const lines = content.split('\n');
+      for (const l of lines) {
+        if (!l.trim()) continue;
+        const m = l.match(/^\[(.*?)\]\s+\[(.*?)\]\s+(.*)$/);
+        if (m) {
+          const type = m[2].toLowerCase();
+          const line = m[3];
+          entries.push({
+            time: Date.now(),
+            line,
+            type,
+            action: extractActionFromLine(line),
+          });
+        } else {
+          entries.push({
+            time: Date.now(),
+            line: l,
+            type: 'stdout',
+            action: extractActionFromLine(l),
+          });
+        }
+      }
+      return entries;
+    } catch {}
+  }
+
+  return entries;
 }
 
 function broadcastTaskEvent(taskId, eventType, data) {
@@ -666,13 +720,16 @@ function handleMonitorHttpRequest(req, res) {
     }
     subs.add(res);
 
-    // 回放历史缓冲
-    const buf = taskLogBuffers.get(taskId) || [];
-    for (const item of buf) {
+    // 1. 回放历史缓冲（内存优先，若为空则跨进程从磁盘读取完整历史）
+    let initialEntries = taskLogBuffers.get(taskId) || [];
+    if (initialEntries.length === 0) {
+      initialEntries = readTaskLogsFromDisk(taskId);
+    }
+    for (const item of initialEntries) {
       res.write(`data: ${JSON.stringify(item)}\n\n`);
     }
 
-    // 回显初始状态
+    // 2. 回显初始状态
     loadTasks();
     const task = runningTasks.get(taskId);
     if (task) {
@@ -692,6 +749,74 @@ function handleMonitorHttpRequest(req, res) {
       }
     }
 
+    // 3. 跨进程磁盘文件实时增量监控 (Tail)
+    const jsonlPath = path.join(TASK_LOGS_DIR, `${taskId}.jsonl`);
+    const logPath = path.join(TASK_LOGS_DIR, `${taskId}.log`);
+    let activeFilePath = fs.existsSync(jsonlPath) ? jsonlPath : (fs.existsSync(logPath) ? logPath : null);
+    let lastFileOffset = 0;
+    let leftover = '';
+
+    if (activeFilePath && fs.existsSync(activeFilePath)) {
+      try {
+        lastFileOffset = fs.statSync(activeFilePath).size;
+      } catch {}
+    }
+
+    const diskTailTimer = setInterval(() => {
+      try {
+        if (!activeFilePath || !fs.existsSync(activeFilePath)) {
+          activeFilePath = fs.existsSync(jsonlPath) ? jsonlPath : (fs.existsSync(logPath) ? logPath : null);
+          if (activeFilePath) {
+            lastFileOffset = 0;
+          } else {
+            return;
+          }
+        }
+
+        const stat = fs.statSync(activeFilePath);
+        if (stat.size > lastFileOffset) {
+          const bytesToRead = stat.size - lastFileOffset;
+          const readBuf = Buffer.alloc(bytesToRead);
+          const fd = fs.openSync(activeFilePath, 'r');
+          fs.readSync(fd, readBuf, 0, bytesToRead, lastFileOffset);
+          fs.closeSync(fd);
+          lastFileOffset = stat.size;
+
+          const chunk = leftover + readBuf.toString('utf8');
+          const lines = chunk.split('\n');
+          leftover = lines.pop() || '';
+
+          for (const l of lines) {
+            if (!l.trim()) continue;
+            let entry = null;
+            if (activeFilePath.endsWith('.jsonl')) {
+              try { entry = JSON.parse(l); } catch {}
+            } else {
+              const m = l.match(/^\[(.*?)\]\s+\[(.*?)\]\s+(.*)$/);
+              if (m) {
+                entry = {
+                  time: Date.now(),
+                  line: m[3],
+                  type: m[2].toLowerCase(),
+                  action: extractActionFromLine(m[3]),
+                };
+              } else {
+                entry = {
+                  time: Date.now(),
+                  line: l,
+                  type: 'stdout',
+                  action: extractActionFromLine(l),
+                };
+              }
+            }
+            if (entry) {
+              res.write(`data: ${JSON.stringify(entry)}\n\n`);
+            }
+          }
+        }
+      } catch (err) {}
+    }, 250);
+
     const heartbeatTimer = setInterval(() => {
       try {
         res.write(`: ping\n\n`);
@@ -702,6 +827,7 @@ function handleMonitorHttpRequest(req, res) {
 
     req.on('close', () => {
       clearInterval(heartbeatTimer);
+      clearInterval(diskTailTimer);
       if (subs) subs.delete(res);
     });
     return;
@@ -713,7 +839,10 @@ function handleMonitorHttpRequest(req, res) {
     const taskId = decodeURIComponent(logsMatch[1]);
     loadTasks();
     const task = runningTasks.get(taskId) || null;
-    const buf = taskLogBuffers.get(taskId) || [];
+    let buf = taskLogBuffers.get(taskId) || [];
+    if (buf.length === 0) {
+      buf = readTaskLogsFromDisk(taskId);
+    }
     let diskLogs = null;
     try {
       const diskPath = path.join(TASK_LOGS_DIR, `${taskId}.log`);
