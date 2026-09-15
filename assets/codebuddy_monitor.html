@@ -51,6 +51,12 @@
 
         <!-- 任务 ID 标签 -->
         <span id="taskBadge" class="text-[10px] font-mono text-slate-400 hidden sm:inline truncate max-w-[100px]"></span>
+
+        <!-- 自动追踪最新模式切换按钮 -->
+        <button id="btnFollowLatest" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer" title="点击切换：自动追踪最新任务 / 锁定当前任务">
+          <span id="followDot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+          <span id="followText">追踪最新</span>
+        </button>
       </div>
 
       <!-- 右侧：计时与状态 -->
@@ -62,6 +68,15 @@
           运行中
         </span>
       </div>
+    </div>
+
+    <!-- 1.1 新任务发现提醒横幅 (New Task Notification Banner) -->
+    <div id="newTaskBanner" class="hidden px-3 py-1 bg-emerald-950/90 border-b border-emerald-700/60 flex items-center justify-between text-xs shrink-0 cursor-pointer hover:bg-emerald-900 transition">
+      <div class="flex items-center gap-1.5 text-emerald-300 font-medium">
+        <span>🚀</span>
+        <span>检测到新任务 <span id="newTaskIdText" class="font-mono underline font-bold">#xxxx</span> 正在运行中</span>
+      </div>
+      <span class="text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-2 py-0.5 rounded shadow">立即切换查看 ▶</span>
     </div>
 
     <!-- 2. 当前动作聚焦横幅 (Action Focus Banner) -->
@@ -142,6 +157,8 @@
       // 1. 获取 URL 参数
       const params = new URLSearchParams(window.location.search);
       let taskId = params.get('taskId') || '';
+      let autoFollow = params.get('auto') === 'latest' || taskId === 'latest' || !taskId;
+      if (taskId === 'latest') taskId = '';
       const port = params.get('port') || '18991';
       const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -151,6 +168,11 @@
       const pingDot = document.getElementById('pingDot');
       const modelBadge = document.getElementById('modelBadge');
       const taskBadge = document.getElementById('taskBadge');
+      const btnFollowLatest = document.getElementById('btnFollowLatest');
+      const followDot = document.getElementById('followDot');
+      const followText = document.getElementById('followText');
+      const newTaskBanner = document.getElementById('newTaskBanner');
+      const newTaskIdText = document.getElementById('newTaskIdText');
       const timerText = document.getElementById('timerText');
       const statusTag = document.getElementById('statusTag');
       const currentActionText = document.getElementById('currentActionText');
@@ -533,34 +555,108 @@
         } catch {}
       }
 
+      function updateFollowUI() {
+        if (!btnFollowLatest) return;
+        if (autoFollow) {
+          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer';
+          followDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping';
+          followText.textContent = '追踪最新';
+          btnFollowLatest.title = '当前模式：自动追踪最新任务（点击锁定当前任务）';
+        } else {
+          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition cursor-pointer';
+          followDot.className = 'w-1.5 h-1.5 rounded-full bg-slate-500';
+          followText.textContent = '已锁定';
+          btnFollowLatest.title = '当前模式：锁定此任务（点击开启自动追踪最新任务）';
+        }
+      }
+
+      if (btnFollowLatest) {
+        btnFollowLatest.addEventListener('click', () => {
+          autoFollow = !autoFollow;
+          updateFollowUI();
+          if (autoFollow) {
+            checkLatestTask(true);
+          }
+        });
+      }
+
+      function switchTask(newTaskId) {
+        if (!newTaskId) return;
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        taskId = newTaskId;
+        taskBadge.textContent = `#${taskId.slice(-8)}`;
+        if (newTaskBanner) newTaskBanner.classList.add('hidden');
+
+        // 重置终端与界面状态
+        terminal.innerHTML = '<div class="text-slate-500">[SYSTEM] 已平滑切换至新任务通道 [' + taskId + ']...</div>';
+        totalLines = 0;
+        allLogsText = '';
+        lineCount.textContent = '共 0 行';
+        isTaskRunning = true;
+
+        // 恢复运行态指示
+        pingRing.className = 'live-pulse absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75';
+        pingDot.className = 'relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500';
+        statusTag.className = 'text-[11px] font-medium px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+        statusTag.textContent = '运行中';
+        btnKill.classList.remove('opacity-50', 'pointer-events-none');
+        btnKill.className = 'px-2.5 py-1 text-[11px] bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded transition flex items-center gap-1 font-medium';
+        killText.textContent = '中止任务';
+
+        fetchUsage(taskId);
+        connectSSE(taskId);
+      }
+
+      async function checkLatestTask(forceSwitch = false) {
+        try {
+          const res = await fetch(`${baseUrl}/api/tasks/latest`);
+          if (res.ok) {
+            const latest = await res.json();
+            if (latest && latest.taskId) {
+              if (!taskId) {
+                switchTask(latest.taskId);
+              } else if (latest.taskId !== taskId) {
+                if (autoFollow || forceSwitch) {
+                  switchTask(latest.taskId);
+                } else if (latest.status === 'running') {
+                  if (newTaskIdText && newTaskBanner) {
+                    newTaskIdText.textContent = `#${latest.taskId.slice(-8)}`;
+                    newTaskBanner.classList.remove('hidden');
+                    newTaskBanner.onclick = () => switchTask(latest.taskId);
+                  }
+                }
+              } else {
+                if (newTaskBanner) newTaskBanner.classList.add('hidden');
+              }
+            }
+          }
+        } catch {}
+      }
+
       // 初始化启动逻辑
       async function init() {
         startTimer(Date.now());
-        if (!taskId) {
-          // 若无 taskId 参数，向 Bridge 请求最新任务
-          try {
-            const res = await fetch(`${baseUrl}/api/tasks/latest`);
-            if (res.ok) {
-              const latest = await res.json();
-              if (latest && latest.taskId) {
-                taskId = latest.taskId;
-              }
-            }
-          } catch {}
-        }
+        updateFollowUI();
+        await checkLatestTask();
 
         if (taskId) {
           taskBadge.textContent = `#${taskId.slice(-8)}`;
           fetchUsage(taskId);
-          setInterval(() => {
-            if (isTaskRunning && taskId) {
-              fetchUsage(taskId);
-            }
-          }, 3000);
           connectSSE(taskId);
         } else {
           appendLog('[SYSTEM] 未检测到活跃的 Task ID。请从 codebuddy_run 派发后自动呼出本监考台。', 'info');
         }
+
+        // 定期查询用量与最新任务
+        setInterval(() => {
+          if (isTaskRunning && taskId) {
+            fetchUsage(taskId);
+          }
+          checkLatestTask();
+        }, 2500);
       }
 
       init();
