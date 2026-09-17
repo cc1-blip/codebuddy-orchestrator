@@ -51,12 +51,16 @@ cd codebuddy-orchestrator && node bin/cli.js doctor
 ```
 系统会自动检测 Node.js (>=18)、PowerShell 脚本策略、CodeBuddy CLI 版本、腾讯账号登录态与本地 AI 宿主配置。
 
+> 💡 **还没装 CodeBuddy CLI？**  
+> 别担心！你可以随时运行 `npx github:cc1-blip/codebuddy-orchestrator install` 一键高速自动安装（内置腾讯云镜像加速）；  
+> 或者直接进行下面的**步骤 2 (选项 A)**，系统在写入配置前若检测到缺少 CLI，会**全自动帮你安装**！
+
 ### 步骤 2：一键配置生成 / 自动写入 (Init)
 
 > 💡 **这是二选一的**：如果你想一步到位直接搞定，**直接执行选项 A 即可**！
 
-#### 选项 A（最推荐 · 一步到位）：自动写入宿主配置
-自动检测并写入你电脑上的 Codex 或 Claude 配置（写入前强制自动生成带时间戳的 `.bak` 备份）：
+#### 选项 A（最推荐 · 一步到位）：自动安装 CLI 并写入宿主配置
+自动检测并写入你电脑上的 Codex 或 Claude 配置（若未安装 CodeBuddy CLI 会自动一键安装，写入前强制自动生成带时间戳的 `.bak` 备份）：
 ```bash
 npx github:cc1-blip/codebuddy-orchestrator init --apply
 ```
@@ -235,7 +239,7 @@ codebuddy-orchestrator/
 ├── package.json                 # npm 发包规范（支持 npx 运行）
 ├── README.md                    # 本说明文档
 ├── bin/
-│   └── cli.js                   # 终端运维 CLI (doctor, init, login, help)
+│   └── cli.js                   # 终端运维 CLI (doctor, install, init, login, logs, status, help)
 ├── src/
 │   ├── server.cjs               # 生产级 MCP 核心调度引擎 (自愈接力、会话锁、超时突破)
 │   ├── installer.js             # 环境巡检、CLI 自动安装/升级、登录探测核心

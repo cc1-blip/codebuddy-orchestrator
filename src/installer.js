@@ -92,13 +92,30 @@ function compareVersion(v1, v2) {
 }
 
 function installCodeBuddyCli() {
-  console.log('[Installer] 正在使用腾讯云镜像安装 CodeBuddy CLI (@tencent-ai/codebuddy-code)...');
+  console.log('📦 [Installer] 正在使用腾讯云镜像高速安装 CodeBuddy CLI (@tencent-ai/codebuddy-code)...');
   try {
-    execSync('npm install -g @tencent-ai/codebuddy-code --registry=https://mirrors.cloud.tencent.com/npm/', {
+    const isWindows = process.platform === 'win32';
+    const npmCmd = isWindows ? 'npm.cmd' : 'npm';
+    execSync(`${npmCmd} install -g @tencent-ai/codebuddy-code --registry=https://mirrors.cloud.tencent.com/npm/`, {
       stdio: 'inherit',
     });
+    console.log('✅ [Installer] CodeBuddy CLI 安装成功！');
+
+    const info = resolveCodeBuddyInfo();
+    if (info.installed) {
+      console.log(`🎉 [Installer] 成功检测到 CLI (版本: ${info.version})，路径: ${info.path}`);
+      const auth = checkAuthStatus();
+      if (!auth.authed) {
+        console.log('\n👉 提示: 您尚未完成账号登录认证，可运行: npx codebuddy-orchestrator login 进行微信/企微扫码登录。');
+      }
+      return { success: true, info };
+    }
     return { success: true };
   } catch (e) {
+    console.error(`❌ [Installer] 安装失败: ${e.message}`);
+    if (process.platform !== 'win32') {
+      console.log('💡 提示: 在 macOS/Linux 上，全局安装可能需要管理员权限，请尝试: sudo npm install -g @tencent-ai/codebuddy-code');
+    }
     return { success: false, error: e.message };
   }
 }
@@ -153,7 +170,7 @@ function runDoctor() {
     console.log(`                路径: ${cli.path}`);
     console.log(`[账号登录状态]   ${auth.authed ? '✅ 已完成登录认证' : '⚪ 未检测到活跃登录 (可运行 login 命令扫码授权)'}`);
   } else {
-    console.log(`[CodeBuddy CLI] ❌ 未检测到 CLI。请运行: npm install -g @tencent-ai/codebuddy-code`);
+    console.log(`[CodeBuddy CLI] ❌ 未检测到 CLI。可一键运行: npx codebuddy-orchestrator install 自动安装`);
   }
 
   console.log('---------------------------------------------------------------');
