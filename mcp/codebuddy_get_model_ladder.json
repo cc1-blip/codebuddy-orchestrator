@@ -1,0 +1,13 @@
+{
+  "name": "codebuddy_get_model_ladder",
+  "description": "查看当前工程当前生效的模型执行阶梯与可用预设方案",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cwd": {
+        "type": "string",
+        "description": "目标工程根目录，缺省为当前工程"
+      }
+    }
+  }
+}

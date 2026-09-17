@@ -1,0 +1,13 @@
+{
+  "name": "codebuddy_list_sessions",
+  "description": "获取当前 CodeBuddy 中所有工程历史和活跃的会话列表",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cwd": {
+        "type": "string",
+        "description": "过滤指定项目的会话；缺省或传入 * 查询全部项目"
+      }
+    }
+  }
+}

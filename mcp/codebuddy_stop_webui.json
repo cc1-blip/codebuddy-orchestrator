@@ -1,0 +1,8 @@
+{
+  "name": "codebuddy_stop_webui",
+  "description": "手动停止后台正在运行的 CodeBuddy WebUI 服务并立即回收系统资源",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  }
+}

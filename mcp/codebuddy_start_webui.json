@@ -1,0 +1,25 @@
+{
+  "name": "codebuddy_start_webui",
+  "description": "启动 CodeBuddy WebUI 守护进程（支持跨域穿透、无密码访问与自动空闲停机回收）",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "port": {
+        "type": "number",
+        "description": "期望监听端口，默认 18990"
+      },
+      "host": {
+        "type": "string",
+        "description": "绑定主机地址，默认 127.0.0.1"
+      },
+      "workspaceDir": {
+        "type": "string",
+        "description": "关联的项目根目录路径"
+      },
+      "idleMinutes": {
+        "type": "number",
+        "description": "空闲自动停机超时时间 (分钟)，默认 25 分钟，设为 0 表示常驻不停机"
+      }
+    }
+  }
+}

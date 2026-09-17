@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Runtime Logs and PIDs
+*.log
+*.pid
+bridge.log
+daemon.log
+
+# Session and task runtime persistence
+.locks/
+tasks.json
+sessions.json
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/

@@ -1,0 +1,8 @@
+{
+  "name": "codebuddy_list_models",
+  "description": "列出 CodeBuddy 支持的主流大模型列表及其能力说明",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  }
+}

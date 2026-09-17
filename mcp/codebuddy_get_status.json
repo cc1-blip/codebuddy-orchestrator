@@ -1,0 +1,8 @@
+{
+  "name": "codebuddy_get_status",
+  "description": "获取 CodeBuddy WebUI 服务状态、当前端口、PID、访问链接及空闲自动停机倒计时",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  }
+}
