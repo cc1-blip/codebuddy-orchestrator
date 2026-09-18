@@ -716,6 +716,44 @@ function handleMonitorHttpRequest(req, res) {
     return;
   }
 
+  // 3.1 任务/会话列表查询 (支持按工作区或当前 taskId 关联过滤): GET /api/tasks
+  if (pathname === '/api/tasks' && req.method === 'GET') {
+    loadTasks();
+    const parsedUrl = url.parse(req.url, true);
+    let filterCwd = parsedUrl.query ? parsedUrl.query.cwd : null;
+    const refTaskId = parsedUrl.query ? parsedUrl.query.taskId : null;
+
+    if (!filterCwd && refTaskId && runningTasks.has(refTaskId)) {
+      filterCwd = runningTasks.get(refTaskId).cwd;
+    }
+
+    const tasksArr = Array.from(runningTasks.values());
+    tasksArr.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+
+    const list = tasksArr.slice(0, 50).map(t => {
+      const durationSec = Math.round(((t.endedAt || Date.now()) - (t.startedAt || Date.now())) / 1000);
+      return {
+        taskId: t.taskId,
+        sessionId: t.sessionId,
+        model: t.model,
+        cwd: t.cwd,
+        status: t.status,
+        startedAt: t.startedAt,
+        endedAt: t.endedAt,
+        durationSec,
+        promptPreview: t.prompt ? t.prompt.replace(/\s+/g, ' ').slice(0, 70) : '',
+        currentAction: t.currentAction || t.progress || '',
+      };
+    });
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      targetCwd: filterCwd || null,
+      tasks: list,
+    }));
+    return;
+  }
+
   // 4. SSE 流式日志: GET /api/tasks/:id/stream
   const streamMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/stream$/);
   if (streamMatch && req.method === 'GET') {
@@ -1925,8 +1963,8 @@ async function startAsyncTask(args, timeoutMs) {
   }
 
   const monitorPort = getActiveMonitorPort();
-  const monitorHttpUrl = `http://127.0.0.1:${monitorPort}/monitor?taskId=${taskId}&port=${monitorPort}`;
-  const monitorEmbedTag = `<agent-embed src="file:///${MONITOR_HTML_PATH.replace(/\\/g, '/')}?taskId=${taskId}&port=${monitorPort}"></agent-embed>`;
+  const monitorHttpUrl = `http://127.0.0.1:${monitorPort}/monitor?taskId=${taskId}&port=${monitorPort}&cwd=${encodeURIComponent(resolvedCwd)}`;
+  const monitorEmbedTag = `<agent-embed src="file:///${MONITOR_HTML_PATH.replace(/\\/g, '/')}?taskId=${taskId}&port=${monitorPort}&cwd=${encodeURIComponent(resolvedCwd)}"></agent-embed>`;
 
   return JSON.stringify({
     status: 'started',

@@ -35,32 +35,39 @@
   <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl shadow-xl overflow-hidden flex flex-col" style="height: 430px; max-height: 430px;">
     
     <!-- 1. 顶部 Header 状态栏 -->
-    <div class="px-3.5 py-2.5 bg-slate-900/60 border-b border-[var(--border)] flex items-center justify-between gap-2 shrink-0">
-      <div class="flex items-center gap-2 min-w-0">
+    <div class="px-3 py-2 bg-slate-900/60 border-b border-[var(--border)] flex items-center justify-between gap-1.5 shrink-0 overflow-hidden">
+      <div class="flex items-center gap-1.5 min-w-0 flex-1">
         <!-- 动态状态指示灯 -->
         <span class="relative flex h-2.5 w-2.5 shrink-0">
           <span id="pingRing" class="live-pulse absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
           <span id="pingDot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
         </span>
-        <span class="font-semibold text-xs tracking-tight text-slate-100 shrink-0">CodeBuddy 监考台</span>
+        <span class="font-semibold text-xs tracking-tight text-slate-100 shrink-0 hidden md:inline">CodeBuddy</span>
         
         <!-- 生效模型徽标 -->
-        <span id="modelBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 truncate max-w-[140px]">
+        <span id="modelBadge" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 truncate max-w-[105px] shrink-0">
           探测中...
         </span>
 
-        <!-- 任务 ID 标签 -->
-        <span id="taskBadge" class="text-[10px] font-mono text-slate-400 hidden sm:inline truncate max-w-[100px]"></span>
+        <!-- 会话切换下拉框 (Session Selector) -->
+        <div class="min-w-0 flex-1 max-w-[170px] xs:max-w-[220px] sm:max-w-[270px] md:max-w-[340px]">
+          <select id="sessionSelector" class="w-full text-[11px] font-mono bg-slate-800/90 hover:bg-slate-700/90 text-slate-200 border border-slate-700 hover:border-slate-500 focus:border-emerald-500 focus:outline-none rounded-md px-1.5 py-0.5 truncate cursor-pointer transition shadow-inner" title="切换当前工作区会话或查看历史任务">
+            <option value="">⚡ 追踪最新任务</option>
+          </select>
+        </div>
+
+        <!-- 任务 ID 标签 (隐藏备用) -->
+        <span id="taskBadge" class="hidden"></span>
 
         <!-- 自动追踪最新模式切换按钮 -->
-        <button id="btnFollowLatest" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer" title="点击切换：自动追踪最新任务 / 锁定当前任务">
+        <button id="btnFollowLatest" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer shrink-0" title="点击切换：自动追踪最新任务 / 锁定当前任务">
           <span id="followDot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-          <span id="followText">追踪最新</span>
+          <span id="followText" class="hidden xs:inline">追踪最新</span>
         </button>
       </div>
 
       <!-- 右侧：计时与状态 -->
-      <div class="flex items-center gap-2 shrink-0">
+      <div class="flex items-center gap-1.5 shrink-0">
         <span class="text-[11px] font-mono text-slate-300 flex items-center gap-1 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
           ⏱️ <span id="timerText">00:00</span>
         </span>
@@ -157,6 +164,7 @@
       // 1. 获取 URL 参数
       const params = new URLSearchParams(window.location.search);
       let taskId = params.get('taskId') || '';
+      let currentKnownCwd = params.get('cwd') || '';
       let autoFollow = params.get('auto') === 'latest' || taskId === 'latest' || !taskId;
       if (taskId === 'latest') taskId = '';
       const port = params.get('port') || '18991';
@@ -168,6 +176,7 @@
       const pingDot = document.getElementById('pingDot');
       const modelBadge = document.getElementById('modelBadge');
       const taskBadge = document.getElementById('taskBadge');
+      const sessionSelector = document.getElementById('sessionSelector');
       const btnFollowLatest = document.getElementById('btnFollowLatest');
       const followDot = document.getElementById('followDot');
       const followText = document.getElementById('followText');
@@ -280,14 +289,23 @@
       if (tokenStats) tokenStats.addEventListener('click', toggleUsageScope);
       if (creditStats) creditStats.addEventListener('click', toggleUsageScope);
 
-      function startTimer(baseStart) {
-        if (timerInterval) clearInterval(timerInterval);
+      function startTimer(baseStart, fixedDurationSec = null) {
+        if (timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
+        }
+        if (fixedDurationSec !== null) {
+          timerText.textContent = formatTime(fixedDurationSec);
+          return;
+        }
         startTime = baseStart || Date.now();
-        timerInterval = setInterval(() => {
+        const updateTick = () => {
           if (!isTaskRunning) return;
           const elapsed = Math.floor((Date.now() - startTime) / 1000);
           timerText.textContent = formatTime(elapsed);
-        }, 1000);
+        };
+        updateTick();
+        timerInterval = setInterval(updateTick, 1000);
       }
 
       // 处理滚动检测
@@ -434,7 +452,14 @@
                 pBox.classList.remove('hidden');
               }
             }
-            if (data.startedAt) startTimer(data.startedAt);
+            if (data.startedAt) {
+              if (data.status && data.status !== 'running' && data.endedAt) {
+                const dur = Math.max(0, Math.round((data.endedAt - data.startedAt) / 1000));
+                startTimer(data.startedAt, dur);
+              } else {
+                startTimer(data.startedAt);
+              }
+            }
             if (data.usage) {
               updateUsageUI(data.usage);
             }
@@ -558,15 +583,17 @@
       function updateFollowUI() {
         if (!btnFollowLatest) return;
         if (autoFollow) {
-          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer';
+          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 flex items-center gap-1 transition cursor-pointer shrink-0';
           followDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping';
           followText.textContent = '追踪最新';
           btnFollowLatest.title = '当前模式：自动追踪最新任务（点击锁定当前任务）';
+          if (sessionSelector) sessionSelector.value = '';
         } else {
-          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition cursor-pointer';
+          btnFollowLatest.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition cursor-pointer shrink-0';
           followDot.className = 'w-1.5 h-1.5 rounded-full bg-slate-500';
           followText.textContent = '已锁定';
           btnFollowLatest.title = '当前模式：锁定此任务（点击开启自动追踪最新任务）';
+          if (sessionSelector && taskId) sessionSelector.value = taskId;
         }
       }
 
@@ -580,6 +607,133 @@
         });
       }
 
+      // 路径标准化与工作区匹配判定
+      function normalizePath(p) {
+        if (!p) return '';
+        return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      }
+
+      function isSameWorkspace(a, b) {
+        if (!a || !b) return false;
+        return normalizePath(a) === normalizePath(b);
+      }
+
+      // 动态加载任务与会话列表
+      let lastTasksSignature = '';
+
+      async function loadSessionList() {
+        if (!sessionSelector) return;
+        try {
+          const queryParams = new URLSearchParams();
+          if (currentKnownCwd) queryParams.set('cwd', currentKnownCwd);
+          if (taskId) queryParams.set('taskId', taskId);
+
+          const res = await fetch(`${baseUrl}/api/tasks?${queryParams.toString()}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (!data || !Array.isArray(data.tasks)) return;
+
+          if (data.targetCwd && !currentKnownCwd) {
+            currentKnownCwd = data.targetCwd;
+          }
+
+          const currentWs = currentKnownCwd || data.targetCwd || '';
+          const tasks = data.tasks;
+
+          // 生成当前任务列表的状态签名，若无变化则不重新构建 DOM，避免打扰用户可能正展开的下拉框
+          const signature = tasks.map(t => `${t.taskId}:${t.status}:${t.durationSec}`).join('|');
+          if (signature === lastTasksSignature) {
+            // 列表未变化，仅同步当前选中项
+            if (sessionSelector.value !== (autoFollow ? '' : taskId)) {
+              sessionSelector.value = autoFollow ? '' : taskId;
+            }
+            return;
+          }
+          lastTasksSignature = signature;
+
+          // 分组：当前工作区 vs 其他工作区
+          const currentWsTasks = [];
+          const otherWsTasks = [];
+
+          for (const t of tasks) {
+            if (currentWs && isSameWorkspace(t.cwd, currentWs)) {
+              currentWsTasks.push(t);
+            } else {
+              otherWsTasks.push(t);
+            }
+          }
+
+          // 清空并重新构建 options
+          sessionSelector.innerHTML = '';
+
+          // 1. 默认追踪最新选项
+          const optLatest = document.createElement('option');
+          optLatest.value = '';
+          optLatest.textContent = '⚡ 追踪最新任务 (Follow Latest)';
+          sessionSelector.appendChild(optLatest);
+
+          function formatOptionLabel(t, showWorkspaceName = false) {
+            const statusIcon = t.status === 'running' ? '🟢' : t.status === 'completed' ? '🔵' : t.status === 'failed' ? '🔴' : '⚪';
+            const shortId = t.taskId.replace(/^task-/, '').slice(0, 8);
+            const rawModel = t.model || '';
+            const modelTag = rawModel ? `[${rawModel.replace('deepseek-', '').replace('hunyuan-', '').replace('-v4.1', '')}]` : '';
+            const durationTag = t.status === 'running' ? '运行中' : (t.durationSec ? `${Math.round(t.durationSec)}s` : '完成');
+            let wsPrefix = '';
+            if (showWorkspaceName && t.cwd) {
+              const wsName = t.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop();
+              if (wsName) wsPrefix = `[${wsName}] `;
+            }
+            const promptPreview = t.promptPreview ? ` - ${t.promptPreview.slice(0, 26)}...` : '';
+            return `${statusIcon} ${wsPrefix}#${shortId} ${modelTag} (${durationTag})${promptPreview}`;
+          }
+
+          // 2. 当前工作区分组
+          if (currentWsTasks.length > 0) {
+            const groupCurrent = document.createElement('optgroup');
+            const wsName = currentWs ? currentWs.replace(/\\/g, '/').split('/').filter(Boolean).pop() : '本工作区';
+            groupCurrent.label = `📁 当前工作区 (${wsName})`;
+            for (const t of currentWsTasks) {
+              const opt = document.createElement('option');
+              opt.value = t.taskId;
+              opt.textContent = formatOptionLabel(t, false);
+              groupCurrent.appendChild(opt);
+            }
+            sessionSelector.appendChild(groupCurrent);
+          }
+
+          // 3. 其他工作区历史分组
+          if (otherWsTasks.length > 0) {
+            const groupOther = document.createElement('optgroup');
+            groupOther.label = '🌐 其他工作区会话 (Other Workspaces)';
+            for (const t of otherWsTasks) {
+              const opt = document.createElement('option');
+              opt.value = t.taskId;
+              opt.textContent = formatOptionLabel(t, true);
+              groupOther.appendChild(opt);
+            }
+            sessionSelector.appendChild(groupOther);
+          }
+
+          // 恢复选定值
+          sessionSelector.value = autoFollow ? '' : taskId;
+        } catch (e) {}
+      }
+
+      if (sessionSelector) {
+        sessionSelector.addEventListener('change', (e) => {
+          const selectedId = e.target.value;
+          if (!selectedId) {
+            autoFollow = true;
+            updateFollowUI();
+            checkLatestTask(true);
+          } else {
+            autoFollow = false;
+            updateFollowUI();
+            switchTask(selectedId);
+          }
+        });
+      }
+
       function switchTask(newTaskId) {
         if (!newTaskId) return;
         if (eventSource) {
@@ -587,11 +741,12 @@
           eventSource = null;
         }
         taskId = newTaskId;
-        taskBadge.textContent = `#${taskId.slice(-8)}`;
+        if (taskBadge) taskBadge.textContent = `#${taskId.slice(-8)}`;
+        if (sessionSelector) sessionSelector.value = autoFollow ? '' : taskId;
         if (newTaskBanner) newTaskBanner.classList.add('hidden');
 
         // 重置终端与界面状态
-        terminal.innerHTML = '<div class="text-slate-500">[SYSTEM] 已平滑切换至新任务通道 [' + taskId + ']...</div>';
+        terminal.innerHTML = '<div class="text-slate-500">[SYSTEM] 已平滑切换至任务通道 [' + taskId + ']...</div>';
         totalLines = 0;
         allLogsText = '';
         lineCount.textContent = '共 0 行';
@@ -625,7 +780,11 @@
                   if (newTaskIdText && newTaskBanner) {
                     newTaskIdText.textContent = `#${latest.taskId.slice(-8)}`;
                     newTaskBanner.classList.remove('hidden');
-                    newTaskBanner.onclick = () => switchTask(latest.taskId);
+                    newTaskBanner.onclick = () => {
+                      autoFollow = false;
+                      updateFollowUI();
+                      switchTask(latest.taskId);
+                    };
                   }
                 }
               } else {
@@ -640,10 +799,12 @@
       async function init() {
         startTimer(Date.now());
         updateFollowUI();
+        await loadSessionList();
         await checkLatestTask();
 
         if (taskId) {
-          taskBadge.textContent = `#${taskId.slice(-8)}`;
+          if (taskBadge) taskBadge.textContent = `#${taskId.slice(-8)}`;
+          if (sessionSelector) sessionSelector.value = autoFollow ? '' : taskId;
           fetchUsage(taskId);
           connectSSE(taskId);
         } else {
@@ -657,6 +818,11 @@
           }
           checkLatestTask();
         }, 2500);
+
+        // 定期静默刷新会话列表
+        setInterval(() => {
+          loadSessionList();
+        }, 5000);
       }
 
       init();
