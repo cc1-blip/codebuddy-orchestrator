@@ -52,6 +52,15 @@
       "async": {
         "type": "boolean",
         "description": "是否作为后台异步长任务执行。设为 true 时立即返回 taskId 与 waitCommand，彻底突破客户端超时限制；【严禁轮询】，请直接执行 waitCommand 挂起等待系统内核放行"
+      },
+      "account": {
+        "type": "string",
+        "description": "运行账号: 'sub' (小号/默认, 优先消耗赠送额度), 'main' (大号/主号, 算力充裕), 'auto' (智能双号接力, 小号额度耗尽自动切大号)",
+        "enum": [
+          "sub",
+          "main",
+          "auto"
+        ]
       }
     },
     "required": [

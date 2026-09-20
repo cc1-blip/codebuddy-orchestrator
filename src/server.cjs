@@ -1412,9 +1412,9 @@ function isNetworkError(errText) {
 }
 
 // --- 单次执行底层调用（含实时流式心跳） ---
-function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permissionMode, onProgress = null, onSpawn = null, onLogLine = null) {
+function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permissionMode, onProgress = null, onSpawn = null, onLogLine = null, account = 'sub') {
   return new Promise((resolve) => {
-    log(`[CLI 执行单次] prompt length=${prompt.length}, model=${model}, cwd=${cwd}, sessionId=${sessionId}, timeoutMs=${timeoutMs}, permissionMode=${permissionMode}`);
+    log(`[CLI 执行单次] account=${account}, prompt length=${prompt.length}, model=${model}, cwd=${cwd}, sessionId=${sessionId}, timeoutMs=${timeoutMs}, permissionMode=${permissionMode}`);
 
     const args = [
       CODEBUDDY_JS,
@@ -1433,8 +1433,16 @@ function runPromptCLISingle(prompt, model, cwd, sessionId, timeoutMs, permission
     let finalOutput = '';
     let isErrorResult = false;
 
+    const env = { ...process.env };
+    if (account === 'main') {
+      env.ACC_PRODUCT_CONFIG_V3 = JSON.stringify({
+        authentication: { id: 'workbuddy-desktop' }
+      });
+    }
+
     const child = spawn(NODE_BIN, args, {
       cwd,
+      env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       // POSIX 下建独立进程组，使超时清理可整组 SIGKILL 回收
@@ -1713,7 +1721,8 @@ async function runPrompt(
   onSpawn = null,
   onLogLine = null,
   ladder = null,
-  failoverOnTimeout = false
+  failoverOnTimeout = false,
+  account = 'sub'
 ) {
   touchActivity();
   const startTime = Date.now();
@@ -1750,9 +1759,9 @@ async function runPrompt(
 
     for (let i = 0; i < candidateModels.length; i++) {
       const curModel = candidateModels[i];
-      log(`[任务执行] 尝试模型 [${i + 1}/${candidateModels.length}]: ${curModel}, session=${targetSessionId}`);
+      log(`[任务执行] 尝试模型 [${i + 1}/${candidateModels.length}]: ${curModel}, account=${account}, session=${targetSessionId}`);
 
-      const res = await runPromptCLISingle(
+      let res = await runPromptCLISingle(
         prompt,
         curModel,
         resolvedCwd,
@@ -1761,8 +1770,31 @@ async function runPrompt(
         permissionMode,
         onProgress,
         onSpawn,
-        onLogLine
+        onLogLine,
+        account === 'main' ? 'main' : 'sub'
       );
+
+      // 双账号自动接力处理：若 account === 'auto'，在当前小号额度不足/429 时，优先切大号跑同款模型
+      if (account === 'auto' && !res.success && res.isQuota) {
+        const subFailNotice = `小号在模型 \`${curModel}\` 额度不足或触发限流，已自动无缝切换至大号接力执行同款模型。`;
+        log(`[AccountFailover] ${subFailNotice}`);
+        failoverNotices.push(subFailNotice);
+        if (typeof onLogLine === 'function') {
+          try { onLogLine(`🔄 [ACCOUNT FAILOVER] ${subFailNotice}`, 'info'); } catch {}
+        }
+        res = await runPromptCLISingle(
+          prompt,
+          curModel,
+          resolvedCwd,
+          targetSessionId,
+          timeoutMs,
+          permissionMode,
+          onProgress,
+          onSpawn,
+          onLogLine,
+          'main'
+        );
+      }
 
       if (res.success) {
         let finalOutput = res.output;
@@ -1917,7 +1949,8 @@ async function startAsyncTask(args, timeoutMs) {
           appendTaskLog(taskId, line, type, act);
         },
         args.ladder || null,
-        args.failover_on_timeout === true
+        args.failover_on_timeout === true,
+        args.account || 'sub'
       );
       taskRecord.status = 'completed';
       taskRecord.output = result;
@@ -2118,6 +2151,11 @@ const TOOLS = [
           type: 'boolean',
           description: '是否作为后台异步长任务执行。设为 true 时立即返回 taskId 与 waitCommand，彻底突破客户端超时限制；【严禁轮询】，请直接执行 waitCommand 挂起等待系统内核放行',
         },
+        account: {
+          type: 'string',
+          description: '运行账号: "sub" (小号/默认, 优先消耗赠送额度), "main" (大号/主号, 算力充裕), "auto" (智能双号接力, 小号额度耗尽自动切大号)',
+          enum: ['sub', 'main', 'auto'],
+        },
       },
       required: ['prompt'],
     },
@@ -2270,7 +2308,8 @@ async function handleRequest(request) {
           null, // onSpawn
           null, // onLogLine
           args.ladder || null,
-          args.failover_on_timeout === true
+          args.failover_on_timeout === true,
+          args.account || 'sub'
         );
         return {
           jsonrpc: '2.0',

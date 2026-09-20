@@ -53,3 +53,11 @@ When launching an asynchronous task (`async: true`):
 - **In Google Antigravity**: Immediately render `embedTag` (`<agent-embed src="..."></agent-embed>`) in the chat bubble. It renders an interactive dark terminal card directly in DOM via local SSE (`127.0.0.1:18991`), providing millisecond-level code flow, incoming prompt review, action focus, and an abort kill-switch with **0 LLM token consumption**.
 - **In OpenAI Codex**: Present `monitorUrl` (`http://127.0.0.1:18991/monitor?taskId=...`) for one-click browser viewing while running `waitCommand` in the terminal.
 
+### 5. Dual-Account Seamless Failover & Process-Level Concurrency
+- **Multi-Account Dispatch (`account`)**:
+  - `sub` (default): Prioritizes Account 1 (小号) for day-to-day coding, consuming daily free credits first.
+  - `main`: Dispatches directly to Account 2 (主号) for heavy or mission-critical tasks.
+  - `auto`: Starts with `sub`. If quota exhaustion, insufficient balance, or 429 rate limits occur, the bridge seamlessly switches to `main` with the **identical model** in the **identical local session**, preserving 100% of the conversation context and cache (99.9% cache hit) before cascading down the model ladder.
+- **Physical Dual-Channel Concurrency**: Sub and main tasks operate with isolated process environments and independent cloud quota counters, enabling multiple concurrent workers to run simultaneously without cloud rate-limit contention.
+
+
